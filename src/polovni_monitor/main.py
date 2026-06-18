@@ -163,6 +163,18 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
                 if verdict.highlights:
                     logger.info("  LLM highlights: %s", verdict.highlights)
 
+        # If the LLM was supposed to run but couldn't (API error / quota), do
+        # NOT consume this listing — leave it unrecorded so it is retried on the
+        # next pass once the LLM is reachable again. Avoids "burning" listings
+        # during an outage.
+        if llm_client is not None and (verdict is None or not verdict.available):
+            logger.warning(
+                "  => defer: LLM unavailable, not recording %s (will retry next pass)",
+                ad_id,
+            )
+            time.sleep(cfg.request_delay_sec)
+            continue
+
         # --- Gate: decide whether to send ---
         use_llm = verdict is not None and verdict.available
         if not price_ok:
