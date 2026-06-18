@@ -206,14 +206,21 @@ def _scan(cfg: Config, conn, fetch, keywords) -> int:
 
 def run_forever(cfg: Config) -> None:
     interval = max(1, cfg.check_interval_min) * 60
-    logger.info("Monitoring started, interval %d min.", cfg.check_interval_min)
-    while True:
-        try:
-            scan_once(cfg)
-        except Exception as exc:  # a single failure must not kill the loop
-            logger.exception("Error during monitoring pass: %s", exc)
-        logger.info("Next check in %d min.", cfg.check_interval_min)
-        time.sleep(interval)
+    logger.info(
+        "Monitoring started, interval %d min. Press Ctrl+C to stop.",
+        cfg.check_interval_min,
+    )
+    try:
+        while True:
+            try:
+                scan_once(cfg)
+            except Exception as exc:  # a single failure must not kill the loop
+                logger.exception("Error during monitoring pass: %s", exc)
+            logger.info("Next check in %d min.", cfg.check_interval_min)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        # scan_once() closes the browser and DB via its own finally block.
+        logger.info("Stop requested (Ctrl+C). Shutting down cleanly.")
 
 
 def cmd_test_telegram(cfg: Config) -> int:
@@ -245,14 +252,19 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config()
 
     command = args.command or "run"
-    if command == "run":
-        run_forever(cfg)
-        return 0
-    if command == "scan-once":
-        scan_once(cfg)
-        return 0
-    if command == "test-telegram":
-        return cmd_test_telegram(cfg)
+    try:
+        if command == "run":
+            run_forever(cfg)
+            return 0
+        if command == "scan-once":
+            scan_once(cfg)
+            return 0
+        if command == "test-telegram":
+            return cmd_test_telegram(cfg)
+    except KeyboardInterrupt:
+        # Interrupt during a single scan; resources are released in scan_once.
+        logger.info("Interrupted by user (Ctrl+C). Exiting.")
+        return 130
     return 0
 
 
