@@ -73,11 +73,18 @@ def build_client(cfg: Config):
     except ImportError:
         logger.warning("openai package not installed — LLM analysis disabled.")
         return None
-    kwargs = {"api_key": cfg.openai_api_key, "timeout": cfg.request_timeout_sec}
-    if cfg.openai_base_url:
-        kwargs["base_url"] = cfg.openai_base_url
-    logger.info("LLM analysis enabled (model=%s).", cfg.openai_model)
-    return OpenAI(**kwargs)
+    # Pass base_url explicitly. An empty OPENAI_BASE_URL in .env is exported as an
+    # empty env var, which the SDK would otherwise read and turn into an invalid
+    # protocol-less URL — so fall back to the official default when it's blank.
+    base_url = cfg.openai_base_url or "https://api.openai.com/v1"
+    client = OpenAI(
+        api_key=cfg.openai_api_key,
+        timeout=cfg.request_timeout_sec,
+        base_url=base_url,
+    )
+    logger.info("LLM analysis enabled (model=%s, base_url=%s).",
+                cfg.openai_model, base_url)
+    return client
 
 
 def _coerce_list(value) -> list[str]:
