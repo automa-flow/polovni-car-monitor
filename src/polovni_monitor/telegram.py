@@ -6,6 +6,7 @@ import logging
 import requests
 
 from .config import Config
+from .deal import DealResult
 from .llm import LlmVerdict
 from .models import Ad
 from .scoring import ScoreResult
@@ -30,6 +31,7 @@ def format_message(
     result: ScoreResult,
     tag: str = "new",
     verdict: LlmVerdict | None = None,
+    deal: DealResult | None = None,
 ) -> str:
     """Build the notification text for a listing."""
     if tag == "updated":
@@ -49,6 +51,7 @@ def format_message(
         f"Mileage: {mileage}",
         f"Fuel: {ad.fuel or '—'}",
         f"Transmission: {ad.transmission or '—'}",
+        f"Location: {ad.location or '—'}",
         "",
         f"Score: {result.score}",
         "Signals:",
@@ -82,6 +85,13 @@ def format_message(
             lines.append("✅ Timing chain/belt: keyword match found (verify in text)")
         else:
             lines.append("❓ Timing chain/belt: not detected by keywords")
+
+    # Good-deal signals (price/mileage/year/origin), independent of the chain.
+    if deal is not None and deal.reasons:
+        lines.append("")
+        lines.append(f"💰 Deal score {deal.score}:")
+        for item in deal.reasons:
+            lines.append(f"   • {item}")
 
     lines += [
         "",

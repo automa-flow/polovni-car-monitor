@@ -16,4 +16,5 @@ class Ad:
     mileage: int | None = None  # km
     fuel: str | None = None
     transmission: str | None = None
+    location: str | None = None
     description: str = ""

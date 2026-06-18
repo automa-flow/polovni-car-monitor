@@ -121,6 +121,18 @@ def _detect_transmission(norm: str) -> str | None:
     return None
 
 
+def _extract_location(soup: BeautifulSoup) -> str | None:
+    """Seller city, e.g. 'Novi Beograd'. Class is a dynamic hash, so match on
+    the stable 'SellerCity' component-name fragment."""
+    for selector in ("[class*=SellerCity]", "[class*=SellerLocation]", "[class*=Location]"):
+        node = soup.select_one(selector)
+        if node:
+            txt = node.get_text(" ", strip=True)
+            if txt and len(txt) < 60:
+                return txt
+    return None
+
+
 def _extract_description(soup: BeautifulSoup, visible: str) -> str:
     """Return the listing's "Opis" (description) block, else all visible text.
 
@@ -172,6 +184,7 @@ def parse_ad(html: str, url: str, ad_id: str) -> Ad:
         tag.decompose()
     visible = soup.get_text(" ", strip=True)
 
+    location = _extract_location(soup)
     description = _extract_description(soup, visible)
     norm_visible = normalize_text(visible)
 
@@ -184,5 +197,6 @@ def parse_ad(html: str, url: str, ad_id: str) -> Ad:
         mileage=parse_mileage(visible),
         fuel=_detect_fuel(norm_visible),
         transmission=_detect_transmission(norm_visible),
+        location=location,
         description=description,
     )

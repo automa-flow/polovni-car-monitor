@@ -138,7 +138,13 @@ See `config/search_urls.example.txt` for an example.
 |----------------------|-------------------------------------------------------------------|
 | `TG_BOT_TOKEN`       | Bot token from BotFather                                          |
 | `TG_CHAT_ID`         | Where to send notifications                                       |
-| `CHECK_INTERVAL_MIN` | Check interval in minutes (for `run`). Default `45`              |
+| `CHECK_INTERVAL_MIN` | Daytime check interval in minutes (for `run`). Default `45`      |
+| `NIGHT_INTERVAL_MIN` | Night check interval in minutes. Default `180` (every 3h)       |
+| `NIGHT_START_HOUR` / `NIGHT_END_HOUR` | Local-time night window. Default `0`–`7`       |
+| `DEAL_MIN_SCORE`     | Deal score that alone justifies sending. Default `3`            |
+| `DEAL_PRICE_EUR`     | "Great price" threshold for the deal heuristic. Default `12500` |
+| `DEAL_MILEAGE_KM`    | "Low mileage" threshold. Default `130000`                      |
+| `DEAL_YEAR_FROM`     | "Recent year" threshold. Default `2020`                        |
 | `PRICE_TO_EUR`       | Price threshold; above it, no notification. Default `14000`      |
 | `SEED_ON_FIRST_RUN`  | `true`: the first run only remembers current listings           |
 | `MIN_SCORE_TO_NOTIFY`| Minimum score to notify. Default `3`                            |
@@ -160,6 +166,10 @@ See `config/search_urls.example.txt` for an example.
 Change `CHECK_INTERVAL_MIN` in `.env`. It only affects the `run` command (the
 infinite loop). For one-off checks use `scan-once` (e.g. from a system
 scheduler — `cron` / Task Scheduler).
+
+At night (local time, by default `00:00`–`07:00`) the bot polls less often —
+every `NIGHT_INTERVAL_MIN` minutes (default 180) instead of
+`CHECK_INTERVAL_MIN` — since new listings are rare overnight.
 
 ### How `SEED_ON_FIRST_RUN` works
 
@@ -193,6 +203,17 @@ To also get notifications for already-existing listings, set
 Edit `config/keywords.json` (three lists: `strong`, `weak`, `negative`) — no
 code changes needed. If the file is missing, the built-in defaults from
 `src/polovni_monitor/scoring.py` are used.
+
+### Good-deal heuristic
+
+Beyond the chain/belt keywords, a listing can also be sent on objective merit
+even without any chain evidence. `src/polovni_monitor/deal.py` scores each car
+on **price** (`≤ DEAL_PRICE_EUR` → +2), **mileage** (`≤ DEAL_MILEAGE_KM` → +1,
+much lower → +2), **year** (`≥ DEAL_YEAR_FROM` → +1) and **origin** (first
+owner / domestic → +1 each). If that score reaches `DEAL_MIN_SCORE`, the bot
+notifies and the message shows a `💰 Deal score` block. A listing is sent when
+the price is within `PRICE_TO_EUR` **and** any of: the LLM says it's worth it,
+the keyword score is high enough, or the deal score is high enough.
 
 ---
 
@@ -249,6 +270,7 @@ polovni-car-monitor/
     config.py      # .env + paths
     db.py          # SQLite
     models.py      # Ad dataclass
+    deal.py        # good-deal heuristic (price/mileage/year/origin)
     fetcher.py     # fetch backends (playwright / requests)
     llm.py         # optional OpenAI listing analysis
     parser.py      # HTML parsing
@@ -260,4 +282,5 @@ polovni-car-monitor/
     test_scoring.py
     test_price_parsing.py
     test_llm.py
+    test_deal.py
 ```

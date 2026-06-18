@@ -38,6 +38,15 @@ class Config:
     openai_api_key: str
     openai_model: str
     openai_base_url: str
+    # Night schedule (local time): slower polling overnight.
+    night_interval_min: int
+    night_start_hour: int
+    night_end_hour: int
+    # "Good deal" heuristic thresholds (used alongside chain/belt scoring).
+    deal_min_score: int
+    deal_price_eur: int
+    deal_mileage_km: int
+    deal_year_from: int
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -90,6 +99,13 @@ def load_config() -> Config:
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip(),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip(),
+        night_interval_min=_get_int("NIGHT_INTERVAL_MIN", 180),
+        night_start_hour=_get_int("NIGHT_START_HOUR", 0),
+        night_end_hour=_get_int("NIGHT_END_HOUR", 7),
+        deal_min_score=_get_int("DEAL_MIN_SCORE", 3),
+        deal_price_eur=_get_int("DEAL_PRICE_EUR", 12500),
+        deal_mileage_km=_get_int("DEAL_MILEAGE_KM", 130000),
+        deal_year_from=_get_int("DEAL_YEAR_FROM", 2020),
     )
 
 

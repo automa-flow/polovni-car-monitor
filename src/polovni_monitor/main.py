@@ -7,12 +7,13 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime
 
 # Support running as `python src/polovni_monitor/main.py`.
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from polovni_monitor import db, fetcher, llm, parser, telegram
+from polovni_monitor import db, deal, fetcher, llm, parser, telegram
 from polovni_monitor.config import (
     KEYWORDS_FILE,
     Config,
@@ -147,11 +148,20 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
         if result.negative_hits:
             logger.info("  ! negative signals present, score was reduced")
 
+        # --- Good-deal heuristic (price / mileage / year / origin) ---
+        norm_text = normalize_text(f"{ad.description}\n{ad.title or ''}")
+        deal_result = deal.evaluate_deal(ad, cfg, norm_text)
+        if deal_result.reasons:
+            logger.info("  deal score=%d (min=%d): %s",
+                        deal_result.score, cfg.deal_min_score, deal_result.reasons)
+
         # --- LLM analysis ---
         verdict = None
         if llm_client is not None:
             logger.info("  running LLM analysis (model=%s)...", cfg.openai_model)
-            verdict = llm.analyze_listing(llm_client, cfg, ad, result)
+            verdict = llm.analyze_listing(
+                llm_client, cfg, ad, result, deal_result.reasons
+            )
             if verdict.available:
                 logger.info(
                     "  LLM: chain/belt=%s | worth_sending=%s | %s",
@@ -163,35 +173,42 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
                 if verdict.highlights:
                     logger.info("  LLM highlights: %s", verdict.highlights)
 
-        # If the LLM was supposed to run but couldn't (API error / quota), do
-        # NOT consume this listing — leave it unrecorded so it is retried on the
-        # next pass once the LLM is reachable again. Avoids "burning" listings
-        # during an outage.
-        if llm_client is not None and (verdict is None or not verdict.available):
-            logger.warning(
-                "  => defer: LLM unavailable, not recording %s (will retry next pass)",
-                ad_id,
-            )
-            time.sleep(cfg.request_delay_sec)
-            continue
+        # Heuristic worthiness that does not need the LLM.
+        keyword_ok = result.score >= cfg.min_score_to_notify
+        deal_ok = deal_result.score >= cfg.deal_min_score
+        base_worth = price_ok and (keyword_ok or deal_ok)
 
-        # --- Gate: decide whether to send ---
+        # If the LLM was supposed to run but couldn't (API error / quota):
+        #  - if a heuristic already marks it worth, send anyway (AI noted as down);
+        #  - otherwise defer (don't record) so it's retried once the LLM is back.
+        if llm_client is not None and (verdict is None or not verdict.available):
+            if not base_worth:
+                logger.warning(
+                    "  => defer: LLM unavailable and no keyword/deal signal — "
+                    "not recording %s (will retry next pass)", ad_id,
+                )
+                time.sleep(cfg.request_delay_sec)
+                continue
+            logger.warning("  LLM unavailable; proceeding on heuristics only")
+
+        # --- Gate: send if price OK and (LLM-worth OR strong keyword OR good deal) ---
         use_llm = verdict is not None and verdict.available
         if not price_ok:
             send, reason = False, (
                 f"price {ad.price} EUR above PRICE_TO_EUR={cfg.price_to_eur}"
             )
-        elif use_llm and not verdict.worth_sending:
-            send, reason = False, f"LLM verdict: not worth sending ({verdict.summary})"
-        elif not use_llm and result.score < cfg.min_score_to_notify:
+        elif use_llm and verdict is not None and verdict.worth_sending:
+            send, reason = True, "LLM says worth sending"
+        elif keyword_ok:
+            send, reason = True, f"strong keyword signal (score {result.score})"
+        elif deal_ok:
+            send, reason = True, "good deal: " + ", ".join(deal_result.reasons)
+        elif use_llm and verdict is not None:
             send, reason = False, (
-                f"keyword score {result.score} below "
-                f"MIN_SCORE_TO_NOTIFY={cfg.min_score_to_notify}"
+                f"LLM not worth, no strong keyword/deal ({verdict.summary})"
             )
         else:
-            send, reason = True, (
-                "LLM says worth sending" if use_llm else "keyword score OK"
-            )
+            send, reason = False, "below keyword and deal thresholds"
 
         db.save_ad(
             conn, ad_id, ad_url, ad.title, ts, chash, result.score,
@@ -200,7 +217,7 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
 
         if send:
             logger.info("  => SEND to Telegram: %s", reason)
-            text = telegram.format_message(ad, result, "new", verdict)
+            text = telegram.format_message(ad, result, "new", verdict, deal_result)
             if telegram.send_message(cfg, text):
                 notified += 1
                 logger.info("  => notification delivered")
@@ -219,11 +236,23 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
     return notified
 
 
+def _interval_minutes(cfg: Config) -> int:
+    """Polling interval for the current local time (slower at night)."""
+    hour = datetime.now().hour
+    start, end = cfg.night_start_hour, cfg.night_end_hour
+    if start <= end:
+        is_night = start <= hour < end
+    else:  # window wraps past midnight, e.g. 23 -> 7
+        is_night = hour >= start or hour < end
+    return cfg.night_interval_min if is_night else cfg.check_interval_min
+
+
 def run_forever(cfg: Config) -> None:
-    interval = max(1, cfg.check_interval_min) * 60
     logger.info(
-        "Monitoring started, interval %d min. Press Ctrl+C to stop.",
-        cfg.check_interval_min,
+        "Monitoring started (day=%d min; night=%d min between %02d:00-%02d:00 local). "
+        "Press Ctrl+C to stop.",
+        cfg.check_interval_min, cfg.night_interval_min,
+        cfg.night_start_hour, cfg.night_end_hour,
     )
     try:
         while True:
@@ -231,8 +260,9 @@ def run_forever(cfg: Config) -> None:
                 scan_once(cfg)
             except Exception as exc:  # a single failure must not kill the loop
                 logger.exception("Error during monitoring pass: %s", exc)
-            logger.info("Next check in %d min.", cfg.check_interval_min)
-            time.sleep(interval)
+            mins = max(1, _interval_minutes(cfg))
+            logger.info("Next check in %d min.", mins)
+            time.sleep(mins * 60)
     except KeyboardInterrupt:
         # scan_once() closes the browser and DB via its own finally block.
         logger.info("Stop requested (Ctrl+C). Shutting down cleanly.")

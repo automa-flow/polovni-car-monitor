@@ -27,7 +27,10 @@ SYSTEM_PROMPT = (
     "C4 Cactus (PureTech, which uses a wet timing BELT, Serbian 'kaiš u ulju'). "
     "These engines are known for timing chain/belt failures, so evidence that the "
     "chain/belt was replaced or recently serviced is the single most important "
-    "factor. Listings are in Serbian. Analyze the provided listing text and reply "
+    "factor. HOWEVER, a car can still be worth sending even WITHOUT chain/belt "
+    "evidence if the overall package is strong (great price, low mileage, recent "
+    "year, first owner / domestic origin). Weigh the whole picture. "
+    "Listings are in Serbian. Analyze the provided listing text and reply "
     "ONLY with a JSON object, no prose. Keep all string values in English. "
     "Schema: {"
     '"chain_belt_status": "yes"|"no"|"unclear" '
@@ -112,7 +115,7 @@ def parse_verdict(text: str) -> LlmVerdict:
     )
 
 
-def _build_user_prompt(ad: Ad, score: ScoreResult) -> str:
+def _build_user_prompt(ad: Ad, score: ScoreResult, deal_reasons: list[str]) -> str:
     desc = ad.description[:MAX_DESC_CHARS]
     return (
         f"Title: {ad.title or '-'}\n"
@@ -120,16 +123,21 @@ def _build_user_prompt(ad: Ad, score: ScoreResult) -> str:
         f"Year: {ad.year if ad.year is not None else '?'}\n"
         f"Mileage: {ad.mileage if ad.mileage is not None else '?'} km\n"
         f"Fuel: {ad.fuel or '?'} | Transmission: {ad.transmission or '?'}\n"
+        f"Location: {ad.location or '?'}\n"
         f"Keyword pre-scan (score {score.score}): "
         f"strong={score.positive_hits} weak={score.weak_hits} "
-        f"negative={score.negative_hits}\n\n"
+        f"negative={score.negative_hits}\n"
+        f"Deal heuristic flags: {deal_reasons or 'none'}\n\n"
         f"Listing text (Serbian):\n{desc}"
     )
 
 
-def analyze_listing(client, cfg: Config, ad: Ad, score: ScoreResult) -> LlmVerdict:
+def analyze_listing(
+    client, cfg: Config, ad: Ad, score: ScoreResult,
+    deal_reasons: list[str] | None = None,
+) -> LlmVerdict:
     """Run the LLM analysis. Never raises; returns an 'unavailable' verdict on error."""
-    user_prompt = _build_user_prompt(ad, score)
+    user_prompt = _build_user_prompt(ad, score, deal_reasons or [])
     logger.info(
         "LLM request for %s (model=%s, %d chars of listing text):\n"
         "----- prompt sent to AI -----\n%s\n----- end prompt -----",
