@@ -38,6 +38,11 @@ def get_ad(conn: sqlite3.Connection, ad_id: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM ads WHERE ad_id = ?", (ad_id,)).fetchone()
 
 
+def touch_ad(conn: sqlite3.Connection, ad_id: str, ts: int) -> None:
+    """Mark a known listing as still present (updates last_seen_ts only)."""
+    conn.execute("UPDATE ads SET last_seen_ts = ? WHERE ad_id = ?", (ts, ad_id))
+
+
 def seed_ad(
     conn: sqlite3.Connection, ad_id: str, url: str, title: str | None, ts: int
 ) -> None:

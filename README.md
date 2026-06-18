@@ -158,12 +158,15 @@ scheduler — `cron` / Task Scheduler).
 On the very first run (the `data/ads.db` database is empty) with
 `SEED_ON_FIRST_RUN=true`, the bot **only remembers** the current listings and
 sends nothing — so you are not flooded with all existing listings at once. From
-the next pass on, it notifies only about **new** listings. If a known listing's
-description changes and new strong signals appear (the resulting score grows),
-you get a repeat notification tagged `🔁 Updated`.
+the next pass on, it notifies only about **new** listings.
 
 To also get notifications for already-existing listings, set
 `SEED_ON_FIRST_RUN=false` before the first run.
+
+> Note: each pass only fetches the listing card for **new** IDs; already-known
+> listings are skipped (no re-fetch). This keeps requests low and avoids
+> Cloudflare friction. The trade-off is that the bot does not re-notify when an
+> existing listing's description later changes.
 
 ---
 
@@ -187,8 +190,8 @@ code changes needed. If the file is missing, the built-in defaults from
 
 ## LLM analysis (optional)
 
-If `USE_LLM=true` and `OPENAI_API_KEY` is set, each **candidate** listing (a new
-one, or a known one whose description changed) is sent to an LLM, which:
+If `USE_LLM=true` and `OPENAI_API_KEY` is set, each **new** listing is sent to
+an LLM, which:
 
 - decides whether the listing is **worth sending** (this becomes the notify gate
   instead of the raw keyword score);
@@ -198,7 +201,7 @@ one, or a known one whose description changed) is sent to an LLM, which:
   not replaced / warned (`no`), or not mentioned (`unclear`) — with a short note.
 
 Keyword scoring still runs first (cheap) and is passed to the model as a hint.
-The LLM is only called for candidates, so it stays low-frequency. Any LLM/API
+The LLM is only called for new listings, so it stays low-frequency. Any LLM/API
 error is non-fatal: the bot logs it and falls back to keyword scoring. With
 `USE_LLM=false` or no API key, the message still answers the chain/belt question
 from the keyword scan.

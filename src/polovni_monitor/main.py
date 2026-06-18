@@ -94,13 +94,28 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
         )
         return 0
 
+    # Only brand-new listing IDs are fetched. Known IDs are skipped (just
+    # refresh last_seen) — this keeps each pass to a handful of requests and
+    # greatly reduces Cloudflare friction. Trade-off: we no longer re-notify
+    # when an existing listing's description changes.
+    ts = int(time.time())
+    new_listings: dict[str, str] = {}
+    for ad_id, ad_url in found.items():
+        if db.get_ad(conn, ad_id) is None:
+            new_listings[ad_id] = ad_url
+        else:
+            db.touch_ad(conn, ad_id, ts)
+    conn.commit()
+    logger.info(
+        "%d known listing(s) skipped (no re-fetch); %d new to analyze.",
+        len(found) - len(new_listings), len(new_listings),
+    )
+
     notified = 0
     examined = 0
-    total = len(found)
-    for idx, (ad_id, ad_url) in enumerate(found.items(), start=1):
-        existing = db.get_ad(conn, ad_id)
-        status = "known" if existing else "NEW"
-        logger.info("[%d/%d] Examining %s listing %s", idx, total, status, ad_id)
+    total = len(new_listings)
+    for idx, (ad_id, ad_url) in enumerate(new_listings.items(), start=1):
+        logger.info("[%d/%d] Analyzing NEW listing %s", idx, total, ad_id)
         try:
             html = fetch.get(ad_url)
         except Exception as exc:
@@ -129,42 +144,12 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
             result.score, cfg.min_score_to_notify,
             result.positive_hits, result.weak_hits, result.negative_hits,
         )
-        if not price_ok:
-            logger.info(
-                "  price %s EUR is above PRICE_TO_EUR=%d -> not eligible",
-                ad.price, cfg.price_to_eur,
-            )
-        elif result.score < cfg.min_score_to_notify:
-            logger.info(
-                "  score below MIN_SCORE_TO_NOTIFY=%d -> not eligible",
-                cfg.min_score_to_notify,
-            )
         if result.negative_hits:
             logger.info("  ! negative signals present, score was reduced")
 
-        # --- Structural state: is this a notification candidate at all? ---
-        ts = int(time.time())
-        prev_hash = existing["content_hash"] if existing else None
-        prev_notified = bool(existing["notified"]) if existing else False
-        prev_score = (existing["last_score"] or 0) if existing else 0
-
-        candidate = True
-        tag = "new"
-        reason = ""
-        if existing is None:
-            tag = "new"
-        elif prev_hash is None:
-            candidate = False
-            reason = "known/seeded listing — recording baseline, no notify"
-        elif prev_hash == chash:
-            candidate = False
-            reason = "known listing, description unchanged"
-        else:
-            tag = "updated"
-
-        # --- LLM analysis (only for candidates, to keep it low-frequency) ---
+        # --- LLM analysis ---
         verdict = None
-        if candidate and llm_client is not None:
+        if llm_client is not None:
             logger.info("  running LLM analysis (model=%s)...", cfg.openai_model)
             verdict = llm.analyze_listing(llm_client, cfg, ad, result)
             if verdict.available:
@@ -178,43 +163,35 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
                 if verdict.highlights:
                     logger.info("  LLM highlights: %s", verdict.highlights)
 
-        # --- Gate: decide whether to actually send ---
-        send = False
-        if candidate:
-            use_llm = verdict is not None and verdict.available
-            if not price_ok:
-                reason = (
-                    f"price {ad.price} EUR above PRICE_TO_EUR={cfg.price_to_eur}"
-                )
-            elif use_llm and not verdict.worth_sending:
-                reason = f"LLM verdict: not worth sending ({verdict.summary})"
-            elif not use_llm and result.score < cfg.min_score_to_notify:
-                reason = (
-                    f"keyword score {result.score} below "
-                    f"MIN_SCORE_TO_NOTIFY={cfg.min_score_to_notify}"
-                )
-            elif tag == "updated" and not use_llm and result.score <= prev_score:
-                # Keyword-only: avoid re-notifying unless the score actually grew.
-                reason = (
-                    f"changed but score not higher (prev={prev_score}, "
-                    f"now={result.score})"
-                )
-            else:
-                send = True
-                reason = "LLM says worth sending" if use_llm else "keyword score OK"
+        # --- Gate: decide whether to send ---
+        use_llm = verdict is not None and verdict.available
+        if not price_ok:
+            send, reason = False, (
+                f"price {ad.price} EUR above PRICE_TO_EUR={cfg.price_to_eur}"
+            )
+        elif use_llm and not verdict.worth_sending:
+            send, reason = False, f"LLM verdict: not worth sending ({verdict.summary})"
+        elif not use_llm and result.score < cfg.min_score_to_notify:
+            send, reason = False, (
+                f"keyword score {result.score} below "
+                f"MIN_SCORE_TO_NOTIFY={cfg.min_score_to_notify}"
+            )
+        else:
+            send, reason = True, (
+                "LLM says worth sending" if use_llm else "keyword score OK"
+            )
 
-        new_notified = 1 if (send or prev_notified) else 0
         db.save_ad(
             conn, ad_id, ad_url, ad.title, ts, chash, result.score,
-            notified=new_notified,
+            notified=1 if send else 0,
         )
 
         if send:
-            logger.info("  => SEND to Telegram (%s): %s", tag, reason)
-            text = telegram.format_message(ad, result, tag, verdict)
+            logger.info("  => SEND to Telegram: %s", reason)
+            text = telegram.format_message(ad, result, "new", verdict)
             if telegram.send_message(cfg, text):
                 notified += 1
-                logger.info("  => notification (%s) delivered", tag)
+                logger.info("  => notification delivered")
             else:
                 logger.warning("  => Telegram send failed")
         else:
@@ -224,7 +201,7 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
 
     conn.commit()
     logger.info(
-        "Pass complete. Listings examined: %d, notifications sent: %d.",
+        "Pass complete. New listings examined: %d, notifications sent: %d.",
         examined, notified,
     )
     return notified
