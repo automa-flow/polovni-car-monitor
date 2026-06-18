@@ -1,0 +1,12 @@
+requests>=2.31
+beautifulsoup4>=4.12
+python-dotenv>=1.0
+# Real browser backend to render JS and clear Cloudflare's standard JS check.
+# After installing, also run: python -m playwright install chromium
+# Pinned to 1.40.0 so its greenlet==3.0.1 dep has a prebuilt wheel on Python 3.9
+# (newer Playwright pulls a greenlet that builds from source / needs MSVC).
+# On Python 3.11+ you can relax this to `playwright>=1.40`.
+playwright==1.40.0
+
+# dev / tests
+pytest>=8.0

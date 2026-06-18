@@ -1,0 +1,12 @@
+# One URL per line. Empty lines and lines starting with # are ignored.
+#
+# How to get a URL:
+#   1. Open https://www.polovniautomobili.com
+#   2. Set the filters you want (make, model, price, transmission, year, etc.)
+#   3. Copy the results page URL from the browser address bar and paste it here.
+
+# C5 Aircross automatic under 14000
+https://www.polovniautomobili.com/auto-oglasi/pretraga?brand=citroen&model%5B%5D=c5-aircross&price_to=14000&transmission=107
+
+# C4 / C4 Cactus automatic under 14000
+https://www.polovniautomobili.com/auto-oglasi/pretraga?brand=citroen&model%5B%5D=c4&model%5B%5D=c4-cactus&price_to=14000&transmission=107

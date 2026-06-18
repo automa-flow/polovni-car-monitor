@@ -1,0 +1,47 @@
+{
+  "strong": [
+    "lanac",
+    "lanca",
+    "razvodni lanac",
+    "lanac bregaste",
+    "lanac bregastih",
+    "zamenjen lanac",
+    "promenjen lanac",
+    "menjan lanac",
+    "urađen lanac",
+    "uradjen lanac",
+    "zupčasti kaiš",
+    "zupcasti kais",
+    "kaiš u ulju",
+    "kais u ulju",
+    "uljni kaiš",
+    "uljni kais",
+    "set razvoda",
+    "razvod",
+    "promenjen kaiš",
+    "zamenjen kaiš",
+    "menjan kaiš"
+  ],
+  "weak": [
+    "veliki servis",
+    "mali i veliki servis",
+    "servisna knjiga",
+    "uredno servisiran",
+    "redovno servisiran",
+    "ovlašćeni servis",
+    "ovlasceni servis",
+    "servisna istorija"
+  ],
+  "negative": [
+    "nije menjan lanac",
+    "nije zamenjen lanac",
+    "nije menjan kaiš",
+    "nije zamenjen kaiš",
+    "čuje se lanac",
+    "cuje se lanac",
+    "problem sa lancem",
+    "problem sa kaišem",
+    "potreban servis",
+    "treba servis"
+  ]
+}
