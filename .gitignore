@@ -22,6 +22,9 @@ __pycache__/
 debug_*.py
 debug_*.html
 
+# persistent playwright browser profile (cookies/cache)
+data/.pw-profile/
+
 # OS / editors
 .DS_Store
 Thumbs.db

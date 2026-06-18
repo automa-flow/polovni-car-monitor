@@ -13,6 +13,12 @@ Cloudflare's standard "Just a moment" check — exactly like opening the page
 yourself. No captchas are solved and no protections are bypassed; requests stay
 low-frequency.
 
+The browser uses a **persistent profile** (`data/.pw-profile/`), so the
+Cloudflare clearance cookie and cache survive between runs and most requests
+skip the challenge entirely. If Cloudflare still blocks you in headless mode,
+set `PLAYWRIGHT_HEADLESS=false` (a visible browser passes much more reliably)
+and/or `PLAYWRIGHT_CHANNEL=chrome` to use your installed Chrome.
+
 Tuned for Citroen C5 Aircross (1.5 BlueHDi — timing chain `lanac`) and
 Citroen C4 / C4 Cactus (PureTech — wet timing belt `kaiš u ulju`).
 
@@ -140,8 +146,10 @@ See `config/search_urls.example.txt` for an example.
 | `REQUEST_DELAY_SEC`  | Delay between requests (politeness). Default `2`                |
 | `DRY_RUN`            | `true`: print messages to console instead of sending to Telegram |
 | `FETCH_BACKEND`      | `playwright` (default, clears Cloudflare) or `requests` (plain HTTP) |
-| `PLAYWRIGHT_HEADLESS`| `true` (default) runs Chromium without a visible window         |
+| `PLAYWRIGHT_HEADLESS`| `true` (default). `false` (visible browser) passes Cloudflare far better |
+| `PLAYWRIGHT_CHANNEL` | Empty = bundled Chromium; `chrome` / `msedge` use your installed browser |
 | `PAGE_WAIT_MS`       | Extra wait after load for the JS challenge/SPA. Default `4000`   |
+| `FETCH_RETRIES`      | Retries if the Cloudflare challenge doesn't clear. Default `2`   |
 | `USE_LLM`            | `true` (default): use OpenAI to analyze listings (needs API key) |
 | `OPENAI_API_KEY`     | OpenAI key; if empty, the bot falls back to keyword scoring     |
 | `OPENAI_MODEL`       | Model for analysis. Default `gpt-4o-mini`                       |

@@ -31,6 +31,7 @@ class Config:
     db_path: Path
     fetch_backend: str  # "playwright" | "requests"
     playwright_headless: bool
+    playwright_channel: str  # "" (bundled chromium) | "chrome" | "msedge"
     page_wait_ms: int
     fetch_retries: int
     use_llm: bool
@@ -82,6 +83,7 @@ def load_config() -> Config:
         db_path=DB_PATH,
         fetch_backend=os.getenv("FETCH_BACKEND", "playwright").strip().lower(),
         playwright_headless=_get_bool("PLAYWRIGHT_HEADLESS", True),
+        playwright_channel=os.getenv("PLAYWRIGHT_CHANNEL", "").strip(),
         page_wait_ms=_get_int("PAGE_WAIT_MS", 4000),
         fetch_retries=max(1, _get_int("FETCH_RETRIES", 2)),
         use_llm=_get_bool("USE_LLM", True),

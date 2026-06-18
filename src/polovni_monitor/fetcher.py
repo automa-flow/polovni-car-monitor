@@ -77,12 +77,37 @@ class PlaywrightFetcher:
         self._timeout_ms = cfg.request_timeout_sec * 1000
         self._retries = max(1, cfg.fetch_retries)
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=cfg.playwright_headless)
-        self._context = self._browser.new_context(
-            user_agent=BROWSER_UA,
-            locale="sr-RS",
-            viewport={"width": 1366, "height": 900},
-        )
+
+        # Persistent profile: the cf_clearance cookie and cache survive between
+        # pages and between runs, so most requests skip the Cloudflare challenge
+        # entirely — exactly like a normal browser that keeps its cookies.
+        profile_dir = cfg.db_path.parent / ".pw-profile"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        self._profile_dir = str(profile_dir)
+        self._context = self._launch_context(cfg.playwright_channel or None)
+
+    def _launch_context(self, channel: str | None):
+        """Launch a persistent context; fall back to bundled Chromium if the
+        requested browser channel (chrome/msedge) is not installed."""
+        try:
+            return self._pw.chromium.launch_persistent_context(
+                self._profile_dir,
+                headless=self._cfg.playwright_headless,
+                channel=channel,
+                user_agent=BROWSER_UA,
+                locale="sr-RS",
+                viewport={"width": 1366, "height": 900},
+                # Hide the headless "navigator.webdriver" automation flag.
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+        except Exception as exc:
+            if channel:
+                logger.warning(
+                    "channel=%s unavailable (%s); falling back to bundled Chromium",
+                    channel, exc,
+                )
+                return self._launch_context(None)
+            raise
 
     def get(self, url: str) -> str:
         """Fetch a fully-rendered page. Raises FetchError if it can't be cleared."""
@@ -150,8 +175,7 @@ class PlaywrightFetcher:
 
     def close(self) -> None:
         try:
-            self._context.close()
-            self._browser.close()
+            self._context.close()  # persistent context owns the browser
         finally:
             self._pw.stop()
 
@@ -161,5 +185,8 @@ def build_fetcher(cfg: Config):
     if cfg.fetch_backend == "requests":
         logger.info("Fetch backend: requests")
         return RequestsFetcher(cfg)
-    logger.info("Fetch backend: playwright (headless=%s)", cfg.playwright_headless)
+    logger.info(
+        "Fetch backend: playwright (headless=%s, channel=%s, persistent profile)",
+        cfg.playwright_headless, cfg.playwright_channel or "chromium",
+    )
     return PlaywrightFetcher(cfg)
