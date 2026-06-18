@@ -7,6 +7,8 @@ python-dotenv>=1.0
 # (newer Playwright pulls a greenlet that builds from source / needs MSVC).
 # On Python 3.11+ you can relax this to `playwright>=1.40`.
 playwright==1.40.0
+# Optional: LLM analysis of listings (set OPENAI_API_KEY to enable).
+openai>=1.0
 
 # dev / tests
 pytest>=8.0

@@ -6,6 +6,7 @@ import logging
 import requests
 
 from .config import Config
+from .llm import LlmVerdict
 from .models import Ad
 from .scoring import ScoreResult
 
@@ -13,12 +14,23 @@ logger = logging.getLogger("polovni_monitor.telegram")
 
 API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
+_CHAIN_LABEL = {
+    "yes": "✅ Timing chain/belt: replaced / serviced",
+    "no": "❌ Timing chain/belt: NOT replaced / problem mentioned",
+    "unclear": "❓ Timing chain/belt: not mentioned in the ad",
+}
+
 
 def _fmt_int(value: int) -> str:
     return f"{value:,}".replace(",", " ")
 
 
-def format_message(ad: Ad, result: ScoreResult, tag: str = "new") -> str:
+def format_message(
+    ad: Ad,
+    result: ScoreResult,
+    tag: str = "new",
+    verdict: LlmVerdict | None = None,
+) -> str:
     """Build the notification text for a listing."""
     if tag == "updated":
         header = "🔁 Updated listing"
@@ -49,6 +61,27 @@ def format_message(ad: Ad, result: ScoreResult, tag: str = "new") -> str:
     for hit in result.negative_hits:
         lines.append(f"❌ {hit} (negative signal, score reduced)")
     lines.append("⚠️ verify with documents")
+
+    # Mandatory chain/belt verdict + AI assessment (when available).
+    lines.append("")
+    if verdict is not None and verdict.available:
+        lines.append(_CHAIN_LABEL.get(verdict.chain_belt_status, _CHAIN_LABEL["unclear"]))
+        if verdict.chain_belt_note:
+            lines.append(f"   → {verdict.chain_belt_note}")
+        if verdict.summary:
+            lines.append(f"🧠 AI assessment: {verdict.summary}")
+        for item in verdict.suspicious:
+            lines.append(f"⚠️ Suspicious: {item}")
+        for item in verdict.highlights:
+            lines.append(f"✅ Highlight: {item}")
+    else:
+        # No LLM: still answer the mandatory chain question from keyword scan.
+        if result.negative_hits:
+            lines.append("❌ Timing chain/belt: negative signal in keywords")
+        elif result.positive_hits:
+            lines.append("✅ Timing chain/belt: keyword match found (verify in text)")
+        else:
+            lines.append("❓ Timing chain/belt: not detected by keywords")
 
     lines += [
         "",

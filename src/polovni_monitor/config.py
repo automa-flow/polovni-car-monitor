@@ -32,6 +32,10 @@ class Config:
     fetch_backend: str  # "playwright" | "requests"
     playwright_headless: bool
     page_wait_ms: int
+    use_llm: bool
+    openai_api_key: str
+    openai_model: str
+    openai_base_url: str
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -78,6 +82,10 @@ def load_config() -> Config:
         fetch_backend=os.getenv("FETCH_BACKEND", "playwright").strip().lower(),
         playwright_headless=_get_bool("PLAYWRIGHT_HEADLESS", True),
         page_wait_ms=_get_int("PAGE_WAIT_MS", 4000),
+        use_llm=_get_bool("USE_LLM", True),
+        openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip(),
+        openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip(),
     )
 
 

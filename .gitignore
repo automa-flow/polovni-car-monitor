@@ -18,6 +18,10 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
+# local debug artifacts
+debug_*.py
+debug_*.html
+
 # OS / editors
 .DS_Store
 Thumbs.db

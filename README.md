@@ -142,6 +142,10 @@ See `config/search_urls.example.txt` for an example.
 | `FETCH_BACKEND`      | `playwright` (default, clears Cloudflare) or `requests` (plain HTTP) |
 | `PLAYWRIGHT_HEADLESS`| `true` (default) runs Chromium without a visible window         |
 | `PAGE_WAIT_MS`       | Extra wait after load for the JS challenge/SPA. Default `4000`   |
+| `USE_LLM`            | `true` (default): use OpenAI to analyze listings (needs API key) |
+| `OPENAI_API_KEY`     | OpenAI key; if empty, the bot falls back to keyword scoring     |
+| `OPENAI_MODEL`       | Model for analysis. Default `gpt-4o-mini`                       |
+| `OPENAI_BASE_URL`    | Optional custom OpenAI-compatible endpoint                      |
 
 ### Configuring the interval
 
@@ -181,6 +185,30 @@ code changes needed. If the file is missing, the built-in defaults from
 
 ---
 
+## LLM analysis (optional)
+
+If `USE_LLM=true` and `OPENAI_API_KEY` is set, each **candidate** listing (a new
+one, or a known one whose description changed) is sent to an LLM, which:
+
+- decides whether the listing is **worth sending** (this becomes the notify gate
+  instead of the raw keyword score);
+- writes a short overall **assessment**;
+- flags **suspicious** points (vague wording, `rezervisan`, odometer doubts, …);
+- gives the **mandatory verdict on the timing chain/belt**: replaced (`yes`),
+  not replaced / warned (`no`), or not mentioned (`unclear`) — with a short note.
+
+Keyword scoring still runs first (cheap) and is passed to the model as a hint.
+The LLM is only called for candidates, so it stays low-frequency. Any LLM/API
+error is non-fatal: the bot logs it and falls back to keyword scoring. With
+`USE_LLM=false` or no API key, the message still answers the chain/belt question
+from the keyword scan.
+
+Default model is `gpt-4o-mini` (cheap); change with `OPENAI_MODEL`. To use an
+OpenAI-compatible endpoint, set `OPENAI_BASE_URL`. To respond in a different
+language, edit `SYSTEM_PROMPT` in `src/polovni_monitor/llm.py`.
+
+---
+
 ## Tests
 
 ```bash
@@ -211,6 +239,7 @@ polovni-car-monitor/
     db.py          # SQLite
     models.py      # Ad dataclass
     fetcher.py     # fetch backends (playwright / requests)
+    llm.py         # optional OpenAI listing analysis
     parser.py      # HTML parsing
     scoring.py     # text analysis
     telegram.py    # message sending
@@ -219,4 +248,5 @@ polovni-car-monitor/
   tests/
     test_scoring.py
     test_price_parsing.py
+    test_llm.py
 ```

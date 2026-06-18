@@ -13,6 +13,7 @@ real browser at a low frequency.
 from __future__ import annotations
 
 import logging
+import time
 
 from .config import Config
 
@@ -23,12 +24,13 @@ BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-# Markers of a Cloudflare interstitial that we may still be looking at.
-_CHALLENGE_MARKERS = (
+# Phrases that appear in the <title> of a Cloudflare interstitial (any language
+# the site serves). Used to tell "still being verified" from "real page".
+_CHALLENGE_TITLE_MARKERS = (
     "just a moment",
-    "cf-browser-verification",
-    "challenge-platform",
+    "sačekajte trenutak",
     "checking your browser",
+    "attention required",
 )
 
 
@@ -79,22 +81,39 @@ class PlaywrightFetcher:
         page = self._context.new_page()
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-            # Give Cloudflare's JS challenge time to resolve and the SPA to render.
+            self._await_clearance(page)
+            # Let the real page settle after the challenge clears.
             try:
                 page.wait_for_load_state("networkidle", timeout=self._timeout_ms)
             except Exception:  # networkidle can time out on chatty pages; ignore
                 pass
             page.wait_for_timeout(self._cfg.page_wait_ms)
-
-            html = page.content()
-            low = html.lower()
-            if any(marker in low for marker in _CHALLENGE_MARKERS):
-                # Still on the interstitial: wait once more and re-read.
-                page.wait_for_timeout(self._cfg.page_wait_ms)
-                html = page.content()
-            return html
+            return page.content()
         finally:
             page.close()
+
+    def _await_clearance(self, page) -> None:
+        """Poll until the Cloudflare interstitial is gone (or we run out of time).
+
+        The JS challenge needs several seconds to resolve; a fixed wait is too
+        short for some pages. We watch the document <title>, which is the most
+        reliable signal — the interstitial title differs from any real page.
+        """
+        deadline = time.monotonic() + (self._timeout_ms / 1000)
+        while time.monotonic() < deadline:
+            if not self._on_challenge(page):
+                return
+            page.wait_for_timeout(1000)
+        logger.warning("Cloudflare challenge did not clear within timeout for %s",
+                       page.url)
+
+    @staticmethod
+    def _on_challenge(page) -> bool:
+        try:
+            title = (page.title() or "").lower()
+        except Exception:  # page navigating; treat as still on challenge
+            return True
+        return any(m in title for m in _CHALLENGE_TITLE_MARKERS)
 
     def close(self) -> None:
         try:

@@ -12,7 +12,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from polovni_monitor import db, fetcher, parser, telegram
+from polovni_monitor import db, fetcher, llm, parser, telegram
 from polovni_monitor.config import (
     KEYWORDS_FILE,
     Config,
@@ -67,15 +67,16 @@ def scan_once(cfg: Config) -> int:
     conn = db.connect(cfg.db_path)
     db.init_db(conn)
     fetch = fetcher.build_fetcher(cfg)
+    llm_client = llm.build_client(cfg)
 
     try:
-        return _scan(cfg, conn, fetch, keywords)
+        return _scan(cfg, conn, fetch, keywords, llm_client)
     finally:
         fetch.close()
         conn.close()
 
 
-def _scan(cfg: Config, conn, fetch, keywords) -> int:
+def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
     seeding = cfg.seed_on_first_run and db.count_ads(conn) == 0
 
     found = _collect_ads(cfg, fetch, load_search_urls())
@@ -111,7 +112,6 @@ def _scan(cfg: Config, conn, fetch, keywords) -> int:
         result = analyze_text(f"{ad.description}\n{ad.title or ''}", keywords)
         chash = _content_hash(ad.description)
         price_ok = ad.price is None or ad.price <= cfg.price_to_eur
-        qualifies = result.score >= cfg.min_score_to_notify and price_ok
 
         logger.info(
             "  parsed: %s | price=%s year=%s mileage=%s fuel=%s trans=%s",
@@ -140,52 +140,76 @@ def _scan(cfg: Config, conn, fetch, keywords) -> int:
         if result.negative_hits:
             logger.info("  ! negative signals present, score was reduced")
 
-        send = False
+        # --- Structural state: is this a notification candidate at all? ---
+        ts = int(time.time())
+        prev_hash = existing["content_hash"] if existing else None
+        prev_notified = bool(existing["notified"]) if existing else False
+        prev_score = (existing["last_score"] or 0) if existing else 0
+
+        candidate = True
         tag = "new"
         reason = ""
-        ts = int(time.time())
-
         if existing is None:
-            if qualifies:
-                send = True
-                reason = "new listing qualifies (score & price OK)"
-            else:
-                reason = "new listing does not qualify"
-            db.save_ad(
-                conn, ad_id, ad_url, ad.title, ts, chash, result.score,
-                notified=1 if send else 0,
-            )
+            tag = "new"
+        elif prev_hash is None:
+            candidate = False
+            reason = "known/seeded listing — recording baseline, no notify"
+        elif prev_hash == chash:
+            candidate = False
+            reason = "known listing, description unchanged"
         else:
-            prev_hash = existing["content_hash"]
-            prev_notified = bool(existing["notified"])
-            prev_score = existing["last_score"] or 0
-            if prev_hash is None:
-                reason = "known/seeded listing — recording baseline, no notify"
-            elif prev_hash == chash:
-                reason = "known listing, description unchanged"
-            elif not qualifies:
-                reason = "known listing changed but does not qualify"
-            elif result.score <= prev_score:
+            tag = "updated"
+
+        # --- LLM analysis (only for candidates, to keep it low-frequency) ---
+        verdict = None
+        if candidate and llm_client is not None:
+            logger.info("  running LLM analysis (model=%s)...", cfg.openai_model)
+            verdict = llm.analyze_listing(llm_client, cfg, ad, result)
+            if verdict.available:
+                logger.info(
+                    "  LLM: chain/belt=%s | worth_sending=%s | %s",
+                    verdict.chain_belt_status, verdict.worth_sending,
+                    verdict.summary or "(no summary)",
+                )
+                if verdict.suspicious:
+                    logger.info("  LLM suspicious: %s", verdict.suspicious)
+                if verdict.highlights:
+                    logger.info("  LLM highlights: %s", verdict.highlights)
+
+        # --- Gate: decide whether to actually send ---
+        send = False
+        if candidate:
+            use_llm = verdict is not None and verdict.available
+            if not price_ok:
                 reason = (
-                    f"known listing changed but score not higher "
-                    f"(prev={prev_score}, now={result.score})"
+                    f"price {ad.price} EUR above PRICE_TO_EUR={cfg.price_to_eur}"
+                )
+            elif use_llm and not verdict.worth_sending:
+                reason = f"LLM verdict: not worth sending ({verdict.summary})"
+            elif not use_llm and result.score < cfg.min_score_to_notify:
+                reason = (
+                    f"keyword score {result.score} below "
+                    f"MIN_SCORE_TO_NOTIFY={cfg.min_score_to_notify}"
+                )
+            elif tag == "updated" and not use_llm and result.score <= prev_score:
+                # Keyword-only: avoid re-notifying unless the score actually grew.
+                reason = (
+                    f"changed but score not higher (prev={prev_score}, "
+                    f"now={result.score})"
                 )
             else:
                 send = True
-                tag = "updated"
-                reason = (
-                    f"known listing updated with higher score "
-                    f"({prev_score} -> {result.score})"
-                )
-            new_notified = 1 if (send or prev_notified) else 0
-            db.save_ad(
-                conn, ad_id, ad_url, ad.title, ts, chash, result.score,
-                notified=new_notified,
-            )
+                reason = "LLM says worth sending" if use_llm else "keyword score OK"
+
+        new_notified = 1 if (send or prev_notified) else 0
+        db.save_ad(
+            conn, ad_id, ad_url, ad.title, ts, chash, result.score,
+            notified=new_notified,
+        )
 
         if send:
             logger.info("  => SEND to Telegram (%s): %s", tag, reason)
-            text = telegram.format_message(ad, result, tag)
+            text = telegram.format_message(ad, result, tag, verdict)
             if telegram.send_message(cfg, text):
                 notified += 1
                 logger.info("  => notification (%s) delivered", tag)
