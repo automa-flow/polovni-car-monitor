@@ -32,6 +32,7 @@ class Config:
     fetch_backend: str  # "playwright" | "requests"
     playwright_headless: bool
     page_wait_ms: int
+    fetch_retries: int
     use_llm: bool
     openai_api_key: str
     openai_model: str
@@ -82,6 +83,7 @@ def load_config() -> Config:
         fetch_backend=os.getenv("FETCH_BACKEND", "playwright").strip().lower(),
         playwright_headless=_get_bool("PLAYWRIGHT_HEADLESS", True),
         page_wait_ms=_get_int("PAGE_WAIT_MS", 4000),
+        fetch_retries=max(1, _get_int("FETCH_RETRIES", 2)),
         use_llm=_get_bool("USE_LLM", True),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip(),

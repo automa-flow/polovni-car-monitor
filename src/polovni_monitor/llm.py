@@ -122,20 +122,39 @@ def _build_user_prompt(ad: Ad, score: ScoreResult) -> str:
 
 def analyze_listing(client, cfg: Config, ad: Ad, score: ScoreResult) -> LlmVerdict:
     """Run the LLM analysis. Never raises; returns an 'unavailable' verdict on error."""
+    user_prompt = _build_user_prompt(ad, score)
+    logger.info(
+        "LLM request for %s (model=%s, %d chars of listing text):\n"
+        "----- prompt sent to AI -----\n%s\n----- end prompt -----",
+        ad.ad_id, cfg.openai_model, min(len(ad.description), MAX_DESC_CHARS),
+        user_prompt,
+    )
     try:
         resp = client.chat.completions.create(
             model=cfg.openai_model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": _build_user_prompt(ad, score)},
+                {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},
             temperature=0.2,
         )
         content = resp.choices[0].message.content or "{}"
-        return parse_verdict(content)
+        logger.info("LLM raw response for %s:\n%s", ad.ad_id, content)
+        verdict = parse_verdict(content)
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            logger.info(
+                "LLM tokens for %s: prompt=%s completion=%s total=%s",
+                ad.ad_id,
+                getattr(usage, "prompt_tokens", "?"),
+                getattr(usage, "completion_tokens", "?"),
+                getattr(usage, "total_tokens", "?"),
+            )
+        return verdict
     except Exception as exc:  # network / API / parse — must not crash the bot
-        logger.warning("LLM analysis failed for %s: %s", ad.ad_id, exc)
+        logger.error("LLM analysis failed for %s: %s: %s",
+                     ad.ad_id, type(exc).__name__, exc)
         return LlmVerdict(
             chain_belt_status="unclear",
             chain_belt_note="LLM analysis unavailable",

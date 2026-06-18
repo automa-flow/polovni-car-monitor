@@ -38,7 +38,8 @@ def _collect_ads(cfg: Config, fetch, urls: list[str]) -> dict[str, str]:
         try:
             html = fetch.get(surl)
         except Exception as exc:  # network must not crash the whole bot
-            logger.warning("  -> failed to load results page: %s", exc)
+            logger.error("  -> failed to load results page: %s: %s",
+                         type(exc).__name__, exc)
             continue
         links = parser.extract_ad_links(html, surl)
         before = len(found)
@@ -103,7 +104,8 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
         try:
             html = fetch.get(ad_url)
         except Exception as exc:
-            logger.warning("  -> failed to load listing: %s", exc)
+            logger.error("  -> failed to load listing %s: %s: %s",
+                         ad_id, type(exc).__name__, exc)
             time.sleep(cfg.request_delay_sec)
             continue
 

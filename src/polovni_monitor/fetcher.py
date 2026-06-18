@@ -29,9 +29,15 @@ BROWSER_UA = (
 _CHALLENGE_TITLE_MARKERS = (
     "just a moment",
     "sačekajte trenutak",
+    "sacekajte trenutak",
     "checking your browser",
     "attention required",
+    "verifying you are human",
 )
+
+
+class FetchError(RuntimeError):
+    """A page could not be fetched cleanly (e.g. Cloudflare never cleared)."""
 
 
 class RequestsFetcher:
@@ -69,6 +75,7 @@ class PlaywrightFetcher:
 
         self._cfg = cfg
         self._timeout_ms = cfg.request_timeout_sec * 1000
+        self._retries = max(1, cfg.fetch_retries)
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=cfg.playwright_headless)
         self._context = self._browser.new_context(
@@ -78,19 +85,46 @@ class PlaywrightFetcher:
         )
 
     def get(self, url: str) -> str:
-        page = self._context.new_page()
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-            self._await_clearance(page)
-            # Let the real page settle after the challenge clears.
+        """Fetch a fully-rendered page. Raises FetchError if it can't be cleared."""
+        last_err: Exception | None = None
+        for attempt in range(1, self._retries + 1):
+            page = self._context.new_page()
             try:
-                page.wait_for_load_state("networkidle", timeout=self._timeout_ms)
-            except Exception:  # networkidle can time out on chatty pages; ignore
-                pass
-            page.wait_for_timeout(self._cfg.page_wait_ms)
-            return page.content()
-        finally:
-            page.close()
+                try:
+                    page.goto(
+                        url, wait_until="domcontentloaded", timeout=self._timeout_ms
+                    )
+                except Exception as exc:  # navigation / timeout
+                    last_err = exc
+                    logger.warning(
+                        "navigation error (attempt %d/%d): %s",
+                        attempt, self._retries, exc,
+                    )
+                    continue
+
+                self._await_clearance(page)
+                if self._on_challenge(page):
+                    last_err = FetchError("Cloudflare challenge not cleared")
+                    logger.warning(
+                        "Cloudflare challenge still up (attempt %d/%d) for %s",
+                        attempt, self._retries, url,
+                    )
+                    continue
+
+                # Real page reached — let it settle, then return its HTML.
+                try:
+                    page.wait_for_load_state("networkidle", timeout=self._timeout_ms)
+                except Exception:  # networkidle can time out on chatty pages; ignore
+                    pass
+                page.wait_for_timeout(self._cfg.page_wait_ms)
+                return page.content()
+            finally:
+                page.close()
+
+        raise FetchError(
+            f"could not fetch after {self._retries} attempt(s): {url} "
+            f"(last error: {last_err})"
+        )
 
     def _await_clearance(self, page) -> None:
         """Poll until the Cloudflare interstitial is gone (or we run out of time).
@@ -104,8 +138,7 @@ class PlaywrightFetcher:
             if not self._on_challenge(page):
                 return
             page.wait_for_timeout(1000)
-        logger.warning("Cloudflare challenge did not clear within timeout for %s",
-                       page.url)
+        # Timed out; the caller (get) decides whether to retry or fail.
 
     @staticmethod
     def _on_challenge(page) -> bool:

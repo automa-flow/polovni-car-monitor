@@ -122,13 +122,38 @@ def _detect_transmission(norm: str) -> str | None:
 
 
 def _extract_description(soup: BeautifulSoup, visible: str) -> str:
-    """Try to find the description block, else fall back to all visible text."""
-    for selector in ("#description", ".description", "[class*=description]", "[id*=opis]"):
+    """Return the listing's "Opis" (description) block, else all visible text.
+
+    PolovniAutomobili renders the description right after an <h2>Opis</h2>
+    heading, inside styled-components containers whose class names are dynamic
+    hashes. We therefore anchor on the heading text (stable) rather than class
+    names, with a couple of class-hint fallbacks.
+    """
+    # 1) Anchor on the "Opis" heading and take the block right after it.
+    for heading in soup.find_all(re.compile(r"^h[1-4]$")):
+        if heading.get_text(strip=True).lower() == "opis":
+            sib = heading.find_next_sibling()
+            if sib:
+                txt = sib.get_text(" ", strip=True)
+                if len(txt) > 40:
+                    return txt
+
+    # 2) Class-name hints (component names tend to survive across deploys).
+    for selector in (
+        "[class*=InfoCardText]",
+        "[class*=InfoCardList]",
+        "#description",
+        ".description",
+        "[class*=description]",
+        "[id*=opis]",
+    ):
         node = soup.select_one(selector)
         if node:
             txt = node.get_text(" ", strip=True)
             if len(txt) > 40:
                 return txt
+
+    # 3) Fallback: the whole visible text (noisy, but never empty).
     return visible
 
 
