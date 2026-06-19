@@ -35,7 +35,11 @@ Citroen C4 / C4 Cactus (PureTech — wet timing belt `kaiš u ulju`).
 1. Reads search URLs from `config/search_urls.txt`.
 2. Opens the results pages and collects listing links.
 3. For new listings, opens the card and parses:
-   `title`, `price`, `year`, `mileage`, `fuel`, `transmission`, `description`, `url`.
+   `title`, `price`, `year`, `mileage`, `fuel`, `transmission`, `location`,
+   `description`, `url`. Structured fields are read from the listing's labeled
+   spec block ("Godište", "Kilometraža", …) and JSON-LD, with whole-page regex
+   only as a fallback — so a stray number from a sidebar isn't mistaken for the
+   car's own data.
 4. Analyzes the description text: strong/weak/negative signals → `score`.
 5. If `score >= MIN_SCORE_TO_NOTIFY` and price `<= PRICE_TO_EUR`, sends to Telegram.
 6. Stores processed listings in SQLite (`data/ads.db`) to avoid spam.
@@ -79,18 +83,20 @@ run.bat test-telegram
 python -m venv .venv
 # Linux/macOS: source .venv/bin/activate
 # Windows:     .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .                        # installs deps + the `polovni-monitor` command
 python -m playwright install chromium   # one-time browser download (~120 MB)
 
 cp .env.example .env
 cp config/search_urls.example.txt config/search_urls.txt
 
-# run (src must be on PYTHONPATH)
+# run via the installed console command
+polovni-monitor scan-once
+polovni-monitor run
+polovni-monitor test-telegram
+polovni-monitor export                  # write notified listings to data/export.csv
+
+# or without installing (src on PYTHONPATH)
 PYTHONPATH=src python -m polovni_monitor scan-once
-PYTHONPATH=src python -m polovni_monitor run
-PYTHONPATH=src python -m polovni_monitor test-telegram
-# or directly
-python src/polovni_monitor/main.py scan-once
 ```
 
 ---
@@ -145,6 +151,12 @@ See `config/search_urls.example.txt` for an example.
 | `DEAL_PRICE_EUR`     | "Great price" threshold for the deal heuristic. Default `12500` |
 | `DEAL_MILEAGE_KM`    | "Low mileage" threshold. Default `130000`                      |
 | `DEAL_YEAR_FROM`     | "Recent year" threshold. Default `2020`                        |
+| `RECHECK_KNOWN_HOURS`| Re-check known listings for price drops at most this often. Default `24` (`0` disables) |
+| `PRICE_DROP_MIN_PCT` | Notify on a price drop of at least this many percent. Default `5` |
+| `PRICE_DROP_MIN_EUR` | …or at least this many euros. Default `300`                     |
+| `HEARTBEAT_HOUR`     | Local hour for the once-a-day status summary. Default `9` (`-1` disables) |
+| `LOG_LEVEL`          | Console log level (`DEBUG`/`INFO`/…). Default `INFO`            |
+| `LOG_FILE`           | Rotating log file path. Empty = `data/logs/monitor.log`; `none` disables |
 | `PRICE_TO_EUR`       | Price threshold; above it, no notification. Default `14000`      |
 | `SEED_ON_FIRST_RUN`  | `true`: the first run only remembers current listings           |
 | `MIN_SCORE_TO_NOTIFY`| Minimum score to notify. Default `3`                            |
@@ -241,11 +253,31 @@ language, edit `SYSTEM_PROMPT` in `src/polovni_monitor/llm.py`.
 
 ---
 
+## Price-drop alerts, heartbeat & export
+
+- **Price-drop alerts.** Known listings are normally not re-fetched (to keep the
+  request rate low), but at most every `RECHECK_KNOWN_HOURS` the bot re-opens
+  them, compares the price to the last seen one, and sends a `📉 Price drop`
+  message when the drop is at least `PRICE_DROP_MIN_PCT` percent or
+  `PRICE_DROP_MIN_EUR` euros.
+- **Daily heartbeat.** Once a day, on/after `HEARTBEAT_HOUR` (local), the bot
+  sends a short summary (listings tracked, notified in the last 24h, last pass)
+  so you know it's still running. Set `HEARTBEAT_HOUR=-1` to disable.
+- **Export.** `polovni-monitor export` writes all notified listings to
+  `data/export.csv` (override with `--path`).
+
+Notifications use Telegram HTML formatting with an inline **"Open listing"**
+button.
+
 ## Tests
 
 ```bash
-PYTHONPATH=src pytest        # or just: pytest (pythonpath is set in pyproject.toml)
+pytest        # pythonpath is set in pyproject.toml
 ```
+
+`tests/test_parser.py` runs against a saved real listing page
+(`tests/fixtures/listing_c5.html`), so parsing is protected against regressions
+if the site markup shifts.
 
 ---
 
@@ -254,8 +286,9 @@ PYTHONPATH=src pytest        # or just: pytest (pythonpath is set in pyproject.t
 ```
 polovni-car-monitor/
   README.md
+  LICENSE
   requirements.txt
-  pyproject.toml
+  pyproject.toml   # packaging + deps + the `polovni-monitor` entry point
   .env.example
   .gitignore
   run.sh
@@ -268,19 +301,22 @@ polovni-car-monitor/
     __main__.py
     main.py        # CLI and loop
     config.py      # .env + paths
-    db.py          # SQLite
+    db.py          # SQLite (with migrations + meta state)
     models.py      # Ad dataclass
     deal.py        # good-deal heuristic (price/mileage/year/origin)
-    fetcher.py     # fetch backends (playwright / requests)
+    fetcher.py     # fetch backends (playwright / requests) behind a Protocol
     llm.py         # optional OpenAI listing analysis
-    parser.py      # HTML parsing
-    scoring.py     # text analysis
-    telegram.py    # message sending
-    utils.py       # logging, normalization
-  data/            # SQLite database (gitignored)
+    parser.py      # HTML parsing (structured spec + JSON-LD, regex fallback)
+    scoring.py     # text analysis (word-boundary keyword matching)
+    telegram.py    # message formatting + sending (HTML + inline button)
+    utils.py       # logging (console + rotating file), normalization
+  data/            # SQLite database, logs, exports (gitignored)
   tests/
+    fixtures/
+      listing_c5.html
     test_scoring.py
     test_price_parsing.py
+    test_parser.py
     test_llm.py
     test_deal.py
 ```

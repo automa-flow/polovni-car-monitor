@@ -1,6 +1,7 @@
 """Load configuration from .env and resolve project paths."""
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,8 @@ SEARCH_URLS_FILE = CONFIG_DIR / "search_urls.txt"
 KEYWORDS_FILE = CONFIG_DIR / "keywords.json"
 ENV_FILE = PROJECT_ROOT / ".env"
 DB_PATH = DATA_DIR / "ads.db"
+DEFAULT_LOG_FILE = DATA_DIR / "logs" / "monitor.log"
+EXPORT_PATH = DATA_DIR / "export.csv"
 
 
 @dataclass
@@ -47,6 +50,15 @@ class Config:
     deal_price_eur: int
     deal_mileage_km: int
     deal_year_from: int
+    # Price-drop re-checks of already-known listings.
+    recheck_known_hours: int
+    price_drop_min_pct: float
+    price_drop_min_eur: int
+    # Daily heartbeat summary (local hour; -1 disables).
+    heartbeat_hour: int
+    # Logging.
+    log_level: int
+    log_file: Path | None
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -74,6 +86,25 @@ def _get_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _get_log_level(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return getattr(logging, raw.strip().upper(), default)
+
+
+def _get_log_file(name: str) -> Path | None:
+    """Resolve the log file path. Empty/default -> standard path; 'none'/'off'
+    disables file logging."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return DEFAULT_LOG_FILE
+    value = raw.strip()
+    if value.lower() in {"none", "off", "false", "0"}:
+        return None
+    return Path(value)
 
 
 def load_config() -> Config:
@@ -106,6 +137,12 @@ def load_config() -> Config:
         deal_price_eur=_get_int("DEAL_PRICE_EUR", 12500),
         deal_mileage_km=_get_int("DEAL_MILEAGE_KM", 130000),
         deal_year_from=_get_int("DEAL_YEAR_FROM", 2020),
+        recheck_known_hours=_get_int("RECHECK_KNOWN_HOURS", 24),
+        price_drop_min_pct=_get_float("PRICE_DROP_MIN_PCT", 5.0),
+        price_drop_min_eur=_get_int("PRICE_DROP_MIN_EUR", 300),
+        heartbeat_hour=_get_int("HEARTBEAT_HOUR", 9),
+        log_level=_get_log_level("LOG_LEVEL", logging.INFO),
+        log_file=_get_log_file("LOG_FILE"),
     )
 
 

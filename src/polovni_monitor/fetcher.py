@@ -14,10 +14,23 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Protocol
 
 from .config import Config
 
 logger = logging.getLogger("polovni_monitor.fetcher")
+
+
+class Fetcher(Protocol):
+    """Common interface for the page-fetching backends."""
+
+    def get(self, url: str) -> str:
+        """Return the fully-rendered HTML for ``url``."""
+        ...
+
+    def close(self) -> None:
+        """Release any underlying resources (HTTP session / browser)."""
+        ...
 
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -180,7 +193,7 @@ class PlaywrightFetcher:
             self._pw.stop()
 
 
-def build_fetcher(cfg: Config):
+def build_fetcher(cfg: Config) -> Fetcher:
     """Create the fetcher selected by ``cfg.fetch_backend``."""
     if cfg.fetch_backend == "requests":
         logger.info("Fetch backend: requests")

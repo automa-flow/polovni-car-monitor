@@ -1,3 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polovni-car-monitor"
+version = "0.1.0"
+description = "Personal low-frequency monitor for PolovniAutomobili listings with Telegram alerts."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Vadakuma" }]
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "python-dotenv>=1.0",
+    # Real browser backend to render JS and clear Cloudflare's standard JS check.
+    # After installing, also run: python -m playwright install chromium
+    "playwright==1.40.0",
+    # Optional LLM analysis (only used when OPENAI_API_KEY is set).
+    "openai>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+polovni-monitor = "polovni_monitor.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

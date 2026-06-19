@@ -2,19 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import logging
-import os
-import sys
 import time
 from datetime import datetime
-
-# Support running as `python src/polovni_monitor/main.py`.
-if __package__ in (None, ""):
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pathlib import Path
 
 from polovni_monitor import db, deal, fetcher, llm, parser, telegram
 from polovni_monitor.config import (
+    EXPORT_PATH,
     KEYWORDS_FILE,
     Config,
     load_config,
@@ -95,24 +92,30 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
         )
         return 0
 
-    # Only brand-new listing IDs are fetched. Known IDs are skipped (just
-    # refresh last_seen) — this keeps each pass to a handful of requests and
-    # greatly reduces Cloudflare friction. Trade-off: we no longer re-notify
-    # when an existing listing's description changes.
+    # Brand-new listing IDs are fully analyzed. Known IDs are normally skipped
+    # (just refresh last_seen) to keep each pass to a handful of requests and
+    # reduce Cloudflare friction — except those due for a price re-check, which
+    # are re-fetched to detect price drops.
     ts = int(time.time())
     new_listings: dict[str, str] = {}
+    recheck_due: list[tuple[str, str, object]] = []
     for ad_id, ad_url in found.items():
-        if db.get_ad(conn, ad_id) is None:
+        existing = db.get_ad(conn, ad_id)
+        if existing is None:
             new_listings[ad_id] = ad_url
+        elif _due_for_recheck(existing, cfg, ts):
+            recheck_due.append((ad_id, ad_url, existing))
         else:
             db.touch_ad(conn, ad_id, ts)
     conn.commit()
     logger.info(
-        "%d known listing(s) skipped (no re-fetch); %d new to analyze.",
-        len(found) - len(new_listings), len(new_listings),
+        "%d known listing(s) skipped; %d due for price re-check; %d new to analyze.",
+        len(found) - len(new_listings) - len(recheck_due),
+        len(recheck_due), len(new_listings),
     )
 
-    notified = 0
+    notified = _recheck_known_prices(cfg, conn, fetch, recheck_due, ts)
+
     examined = 0
     total = len(new_listings)
     for idx, (ad_id, ad_url) in enumerate(new_listings.items(), start=1):
@@ -212,13 +215,13 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
 
         db.save_ad(
             conn, ad_id, ad_url, ad.title, ts, chash, result.score,
-            notified=1 if send else 0,
+            notified=1 if send else 0, price=ad.price,
         )
 
         if send:
             logger.info("  => SEND to Telegram: %s", reason)
             text = telegram.format_message(ad, result, "new", verdict, deal_result)
-            if telegram.send_message(cfg, text):
+            if telegram.send_message(cfg, text, telegram.listing_button(ad_url)):
                 notified += 1
                 logger.info("  => notification delivered")
             else:
@@ -228,11 +231,60 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
 
         time.sleep(cfg.request_delay_sec)
 
+    db.set_meta(conn, "last_pass_ts", str(ts))
     conn.commit()
     logger.info(
         "Pass complete. New listings examined: %d, notifications sent: %d.",
         examined, notified,
     )
+    return notified
+
+
+def _due_for_recheck(existing, cfg: Config, now_ts: int) -> bool:
+    """Whether a known listing should be re-fetched to check for a price drop."""
+    if cfg.recheck_known_hours <= 0:
+        return False
+    last_checked = existing["price_checked_ts"] or existing["first_seen_ts"]
+    return (now_ts - last_checked) >= cfg.recheck_known_hours * 3600
+
+
+def _recheck_known_prices(cfg: Config, conn, fetch, recheck_due, ts: int) -> int:
+    """Re-fetch listings due for a price check; notify on a meaningful drop.
+
+    Returns the number of price-drop notifications sent.
+    """
+    notified = 0
+    total = len(recheck_due)
+    for idx, (ad_id, ad_url, existing) in enumerate(recheck_due, start=1):
+        logger.info("[recheck %d/%d] known listing %s", idx, total, ad_id)
+        try:
+            html = fetch.get(ad_url)
+        except Exception as exc:
+            logger.error("  -> re-check fetch failed for %s: %s: %s",
+                         ad_id, type(exc).__name__, exc)
+            db.touch_ad(conn, ad_id, ts)
+            time.sleep(cfg.request_delay_sec)
+            continue
+
+        ad = parser.parse_ad(html, ad_url, ad_id)
+        old_price = existing["last_price"]
+        new_price = ad.price
+        logger.info("  price: old=%s new=%s", old_price, new_price)
+
+        if new_price is not None and old_price is not None and new_price < old_price:
+            drop_eur = old_price - new_price
+            drop_pct = drop_eur / old_price * 100
+            if drop_eur >= cfg.price_drop_min_eur or drop_pct >= cfg.price_drop_min_pct:
+                logger.info("  => price drop %s -> %s (−%.0f%%), notifying",
+                            old_price, new_price, drop_pct)
+                text = telegram.format_price_drop(ad, old_price, new_price)
+                if telegram.send_message(cfg, text, telegram.listing_button(ad_url)):
+                    notified += 1
+
+        # Keep the last known price if the page didn't yield one this time.
+        db.update_price(conn, ad_id, new_price if new_price is not None else old_price, ts)
+        conn.commit()
+        time.sleep(cfg.request_delay_sec)
     return notified
 
 
@@ -247,6 +299,41 @@ def _interval_minutes(cfg: Config) -> int:
     return cfg.night_interval_min if is_night else cfg.check_interval_min
 
 
+def _maybe_send_heartbeat(cfg: Config) -> None:
+    """Once a day (on/after HEARTBEAT_HOUR local) send a short status summary."""
+    if cfg.heartbeat_hour < 0:
+        return
+    now = datetime.now()
+    if now.hour < cfg.heartbeat_hour:
+        return
+    today = now.strftime("%Y-%m-%d")
+    conn = db.connect(cfg.db_path)
+    db.init_db(conn)
+    try:
+        if db.get_meta(conn, "heartbeat_date") == today:
+            return  # already sent today
+        total = db.count_ads(conn)
+        notified_24h = db.count_notified_since(conn, int(time.time()) - 24 * 3600)
+        last_pass = db.get_meta(conn, "last_pass_ts")
+        when = (
+            datetime.fromtimestamp(int(last_pass)).strftime("%Y-%m-%d %H:%M")
+            if last_pass
+            else "—"
+        )
+        text = (
+            "💟 <b>Monitor heartbeat</b>\n\n"
+            f"Listings tracked: {total}\n"
+            f"Notified (last 24h): {notified_24h}\n"
+            f"Last pass: {when}"
+        )
+        if telegram.send_message(cfg, text):
+            db.set_meta(conn, "heartbeat_date", today)
+            conn.commit()
+            logger.info("Heartbeat sent.")
+    finally:
+        conn.close()
+
+
 def run_forever(cfg: Config) -> None:
     logger.info(
         "Monitoring started (day=%d min; night=%d min between %02d:00-%02d:00 local). "
@@ -258,6 +345,7 @@ def run_forever(cfg: Config) -> None:
         while True:
             try:
                 scan_once(cfg)
+                _maybe_send_heartbeat(cfg)
             except Exception as exc:  # a single failure must not kill the loop
                 logger.exception("Error during monitoring pass: %s", exc)
             mins = max(1, _interval_minutes(cfg))
@@ -279,6 +367,30 @@ def cmd_test_telegram(cfg: Config) -> int:
     return 1
 
 
+def cmd_export(cfg: Config, path: Path) -> int:
+    """Write all notified listings to a CSV file."""
+    conn = db.connect(cfg.db_path)
+    db.init_db(conn)
+    try:
+        rows = db.iter_notified(conn)
+    finally:
+        conn.close()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["ad_id", "title", "price_eur", "score", "first_seen", "url"])
+        for row in rows:
+            first_seen = datetime.fromtimestamp(row["first_seen_ts"]).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            writer.writerow([
+                row["ad_id"], row["title"] or "", row["last_price"] or "",
+                row["last_score"], first_seen, row["url"],
+            ])
+    logger.info("Exported %d listing(s) to %s", len(rows), path)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="polovni_monitor",
@@ -288,13 +400,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("run", help="Continuous monitoring.")
     sub.add_parser("scan-once", help="A single pass, then exit.")
     sub.add_parser("test-telegram", help="Send a test message to Telegram.")
+    exp = sub.add_parser("export", help="Export notified listings to CSV.")
+    exp.add_argument("--path", type=Path, default=EXPORT_PATH,
+                     help=f"Output CSV path (default: {EXPORT_PATH}).")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    setup_logging()
     args = build_parser().parse_args(argv)
     cfg = load_config()
+    setup_logging(level=cfg.log_level, log_file=cfg.log_file)
 
     command = args.command or "run"
     try:
@@ -306,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if command == "test-telegram":
             return cmd_test_telegram(cfg)
+        if command == "export":
+            return cmd_export(cfg, args.path)
     except KeyboardInterrupt:
         # Interrupt during a single scan; resources are released in scan_once.
         logger.info("Interrupted by user (Ctrl+C). Exiting.")

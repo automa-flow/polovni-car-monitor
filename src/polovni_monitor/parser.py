@@ -1,10 +1,18 @@
 """Fetch and parse PolovniAutomobili pages.
 
 Only basic listing data: link, title, price, year, mileage, fuel,
-transmission, and the description text. No seller contacts / phone numbers.
+transmission, location, and the description text. No seller contacts / phone
+numbers.
+
+Structured fields (year/mileage/fuel/transmission) are read from the listing's
+labeled spec block first ("Godište: 2020.", "Kilometraža: 146.930 km", …), and
+location from JSON-LD / the seller-city block, falling back to whole-page regex
+only when a labeled value is missing — so a stray number from a sidebar or
+footer is not mistaken for the listing's own data.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from urllib.parse import urljoin
@@ -29,6 +37,15 @@ PRICE_RE = re.compile(r"(\d{1,3}(?:[.\s]\d{3})+|\d{3,6})\s*€")
 MILEAGE_RE = re.compile(r"(\d{1,3}(?:[.\s]\d{3})+|\d{3,7})\s*km", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b(19[89]\d|20[0-2]\d)\b")
 
+# Spec-block lookups run on normalized (lowercase, diacritic-free) text where
+# "Godište\n:\n2020." collapses to "godiste : 2020.".
+SPEC_YEAR_RE = re.compile(r"godiste\s*:?\s*((?:19|20)\d{2})")
+SPEC_MILEAGE_RE = re.compile(
+    r"kilometraza\s*:?\s*(\d{1,3}(?:[.\s]\d{3})+|\d{3,7})\s*km"
+)
+SPEC_FUEL_RE = re.compile(r"gorivo\s*:?\s*([a-z()/ +-]{2,30})")
+SPEC_TRANS_RE = re.compile(r"menjac\s*:?\s*([a-z/ ]{2,40})")
+
 FUEL_KEYWORDS = {
     "dizel": "Dizel",
     "benzin": "Benzin",
@@ -48,14 +65,6 @@ def build_session() -> requests.Session:
         }
     )
     return session
-
-
-def fetch(session: requests.Session, url: str, timeout: int) -> str:
-    """Fetch a page. Lets requests exceptions propagate to the caller."""
-    resp = session.get(url, timeout=timeout)
-    resp.raise_for_status()
-    resp.encoding = resp.apparent_encoding or "utf-8"
-    return resp.text
 
 
 def extract_ad_links(html: str, base_url: str) -> list[tuple[str, str]]:
@@ -116,14 +125,61 @@ def _detect_fuel(norm: str) -> str | None:
 def _detect_transmission(norm: str) -> str | None:
     if "automat" in norm:
         return "Automatik"
-    if "manuel" in norm:
+    if "manuel" in norm or "manual" in norm:
         return "Manuelni"
     return None
 
 
+def _spec_year(norm: str) -> int | None:
+    m = SPEC_YEAR_RE.search(norm)
+    return int(m.group(1)) if m else None
+
+
+def _spec_mileage(norm: str) -> int | None:
+    m = SPEC_MILEAGE_RE.search(norm)
+    if not m:
+        return None
+    try:
+        return _to_int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _spec_fuel(norm: str) -> str | None:
+    m = SPEC_FUEL_RE.search(norm)
+    return _detect_fuel(m.group(1)) if m else None
+
+
+def _spec_transmission(norm: str) -> str | None:
+    m = SPEC_TRANS_RE.search(norm)
+    return _detect_transmission(m.group(1)) if m else None
+
+
+def _iter_jsonld(soup: BeautifulSoup):
+    """Yield each JSON-LD object on the page (flattening top-level lists).
+
+    Must run before scripts are stripped from the soup.
+    """
+    for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        try:
+            data = json.loads(tag.string or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for obj in data if isinstance(data, list) else [data]:
+            if isinstance(obj, dict):
+                yield obj
+
+
 def _extract_location(soup: BeautifulSoup) -> str | None:
-    """Seller city, e.g. 'Novi Beograd'. Class is a dynamic hash, so match on
-    the stable 'SellerCity' component-name fragment."""
+    """Seller city, e.g. 'Novi Sad'. Prefer JSON-LD ``address.addressLocality``
+    (reliable for dealers), then the seller-city block (class is a dynamic hash,
+    so match on the stable 'SellerCity' component-name fragment)."""
+    for obj in _iter_jsonld(soup):
+        addr = obj.get("address")
+        if isinstance(addr, dict):
+            loc = addr.get("addressLocality")
+            if loc and str(loc).strip():
+                return str(loc).strip()
     for selector in ("[class*=SellerCity]", "[class*=SellerLocation]", "[class*=Location]"):
         node = soup.select_one(selector)
         if node:
@@ -180,23 +236,34 @@ def parse_ad(html: str, url: str, ad_id: str) -> Ad:
     if h1 and h1.get_text(strip=True):
         title = h1.get_text(strip=True)
 
+    # Location is read first — it relies on JSON-LD <script> tags that the
+    # cleanup pass below removes.
+    location = _extract_location(soup)
+
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
     visible = soup.get_text(" ", strip=True)
 
-    location = _extract_location(soup)
     description = _extract_description(soup, visible)
     norm_visible = normalize_text(visible)
+
+    # Prefer the labeled spec block; fall back to whole-page regex.
+    year = _spec_year(norm_visible)
+    mileage = _spec_mileage(norm_visible)
+    fuel = _spec_fuel(norm_visible)
+    transmission = _spec_transmission(norm_visible)
 
     return Ad(
         ad_id=ad_id,
         url=url,
         title=title,
         price=parse_price(visible),
-        year=parse_year(visible),
-        mileage=parse_mileage(visible),
-        fuel=_detect_fuel(norm_visible),
-        transmission=_detect_transmission(norm_visible),
+        year=year if year is not None else parse_year(visible),
+        mileage=mileage if mileage is not None else parse_mileage(visible),
+        fuel=fuel if fuel is not None else _detect_fuel(norm_visible),
+        transmission=transmission
+        if transmission is not None
+        else _detect_transmission(norm_visible),
         location=location,
         description=description,
     )

@@ -31,3 +31,11 @@ def test_single_signal_counted_once():
     # Repeating the same signal must not multiply the score.
     result = analyze_text("lanac lanac lanac")
     assert result.score == 3
+
+
+def test_no_substring_false_positive():
+    # "razvod"/"lanac" are strong keywords, but word-boundary matching must not
+    # fire on a longer unrelated word like "razvodnik" (distributor).
+    result = analyze_text("Menjam auto zbog razvodnika u motoru.")
+    assert result.positive_hits == []
+    assert result.score == 0

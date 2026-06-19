@@ -1,14 +1,11 @@
-requests>=2.31
-beautifulsoup4>=4.12
-python-dotenv>=1.0
-# Real browser backend to render JS and clear Cloudflare's standard JS check.
-# After installing, also run: python -m playwright install chromium
-# Pinned to 1.40.0 so its greenlet==3.0.1 dep has a prebuilt wheel on Python 3.9
-# (newer Playwright pulls a greenlet that builds from source / needs MSVC).
-# On Python 3.11+ you can relax this to `playwright>=1.40`.
-playwright==1.40.0
-# Optional: LLM analysis of listings (set OPENAI_API_KEY to enable).
-openai>=1.0
-
-# dev / tests
-pytest>=8.0
+# The canonical dependency list lives in pyproject.toml ([project].dependencies).
+# This installs the package itself (editable) plus the dev/test extras, so the
+# `polovni-monitor` command and `import polovni_monitor` work without PYTHONPATH.
+#
+# After installing, also run the one-time browser download:
+#   python -m playwright install chromium
+#
+# Note: playwright is pinned to 1.40.0 in pyproject so its greenlet==3.0.1 dep
+# has a prebuilt wheel on Python 3.9 (newer Playwright builds from source / needs
+# MSVC). On Python 3.11+ you can relax that pin.
+-e .[dev]

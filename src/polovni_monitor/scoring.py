@@ -2,10 +2,24 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .utils import normalize_text
+
+# Compiled word-boundary matchers, cached by phrase. Using look-arounds (not
+# plain substring) so e.g. the strong term "razvod" does not match inside
+# "razvodni", and "lanac" does not match inside an unrelated longer word.
+_PHRASE_RE_CACHE: dict[str, "re.Pattern[str]"] = {}
+
+
+def _phrase_re(phrase: str) -> "re.Pattern[str]":
+    pat = _PHRASE_RE_CACHE.get(phrase)
+    if pat is None:
+        pat = re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)")
+        _PHRASE_RE_CACHE[phrase] = pat
+    return pat
 
 STRONG_SCORE = 3
 WEAK_SCORE = 1
@@ -105,12 +119,12 @@ def analyze_text(text: str, keywords: dict[str, list[str]] | None = None) -> Sco
     work = norm
     negative_hits: list[str] = []
     for phrase in kw["negative"]:
-        if phrase and phrase in work:
+        if phrase and _phrase_re(phrase).search(work):
             negative_hits.append(phrase)
-            work = work.replace(phrase, " ")
+            work = _phrase_re(phrase).sub(" ", work)
 
-    positive_hits = [p for p in kw["strong"] if p and p in work]
-    weak_hits = [w for w in kw["weak"] if w and w in work]
+    positive_hits = [p for p in kw["strong"] if p and _phrase_re(p).search(work)]
+    weak_hits = [w for w in kw["weak"] if w and _phrase_re(w).search(work)]
     negative_hits = sorted(set(negative_hits))
 
     score = (
