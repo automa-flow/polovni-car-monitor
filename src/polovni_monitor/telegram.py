@@ -57,12 +57,15 @@ def format_message(
     tag: str = "new",
     verdict: LlmVerdict | None = None,
     deal: DealResult | None = None,
+    interesting: bool = False,
 ) -> str:
     """Build the notification text for a listing."""
     if tag == "updated":
         header = "🔁 Updated listing"
+    elif interesting:
+        header = "🔥 DON'T MISS! Interesting listing found"
     else:
-        header = "🚗 Interesting listing found"
+        header = "📋 New listing"
 
     price = f"{_fmt_int(ad.price)} €" if ad.price is not None else "not detected"
     mileage = f"{_fmt_int(ad.mileage)} km" if ad.mileage is not None else "—"

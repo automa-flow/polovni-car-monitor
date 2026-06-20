@@ -205,28 +205,34 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
                 continue
             logger.warning("  LLM unavailable; proceeding on heuristics only")
 
-        # --- Gate: LLM is authoritative when available; keywords/deal are fallback only ---
+        # --- Always send; mark if interesting (worth a closer look) ---
         use_llm = verdict is not None and verdict.available
+        interesting = False
+
         if not price_ok:
+            # Skip if price too high
             send, reason = False, (
                 f"price {ad.price} EUR above PRICE_TO_EUR={cfg.price_to_eur}"
             )
-        elif use_llm and verdict is not None:
-            # LLM ran successfully — its verdict is final
-            if verdict.worth_sending:
-                send, reason = True, f"LLM: worth sending (value {verdict.value_score}/10, {verdict.risk_level} risk)"
-            else:
-                send, reason = False, (
-                    f"LLM: not worth it (value {verdict.value_score}/10, {verdict.risk_level} risk) — {verdict.reasoning}"
-                )
-        elif keyword_ok:
-            # No LLM — fall back to keywords
-            send, reason = True, f"no LLM; strong keyword signal (score {result.score})"
-        elif deal_ok:
-            # No LLM — fall back to deal heuristic
-            send, reason = True, "no LLM; good deal: " + ", ".join(deal_result.reasons)
         else:
-            send, reason = False, "below keyword and deal thresholds"
+            # Always send, but mark if interesting
+            send = True
+            if use_llm and verdict is not None:
+                if verdict.worth_sending:
+                    interesting = True
+                    reason = f"LLM: worth sending (value {verdict.value_score}/10, {verdict.risk_level} risk)"
+                else:
+                    reason = (
+                        f"LLM: not compelling (value {verdict.value_score}/10, {verdict.risk_level} risk)"
+                    )
+            elif keyword_ok:
+                interesting = True
+                reason = f"strong keyword signal (score {result.score})"
+            elif deal_ok:
+                interesting = True
+                reason = "good deal: " + ", ".join(deal_result.reasons)
+            else:
+                reason = "informational"
 
         db.save_ad(
             conn, ad_id, ad_url, ad.title, ts, chash, result.score,
@@ -234,8 +240,8 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
         )
 
         if send:
-            logger.info("  => SEND to Telegram: %s", reason)
-            text = telegram.format_message(ad, result, "new", verdict, deal_result)
+            logger.info("  => SEND to Telegram: %s%s", reason, " (INTERESTING)" if interesting else "")
+            text = telegram.format_message(ad, result, "new", verdict, deal_result, interesting=interesting)
             if telegram.send_message(cfg, text, telegram.listing_button(ad_url)):
                 notified += 1
                 logger.info("  => notification delivered")
