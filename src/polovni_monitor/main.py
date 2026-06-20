@@ -130,9 +130,6 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
 
         examined += 1
         ad = parser.parse_ad(html, ad_url, ad_id)
-        result = analyze_text(f"{ad.description}\n{ad.title or ''}", keywords)
-        chash = _content_hash(ad.description)
-        price_ok = ad.price is None or ad.price <= cfg.price_to_eur
 
         logger.info(
             "  parsed: %s | price=%s year=%s mileage=%s fuel=%s trans=%s",
@@ -143,6 +140,18 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
             ad.fuel or "?",
             ad.transmission or "?",
         )
+
+        # Skip manual transmissions (only automatic)
+        if ad.transmission and "manuelni" in ad.transmission.lower():
+            logger.info("  => skip: manual transmission (only automatic accepted)")
+            db.save_ad(conn, ad_id, ad_url, ad.title, ts, "", 0, notified=0, price=ad.price)
+            conn.commit()
+            time.sleep(cfg.request_delay_sec)
+            continue
+
+        result = analyze_text(f"{ad.description}\n{ad.title or ''}", keywords)
+        chash = _content_hash(ad.description)
+        price_ok = ad.price is None or ad.price <= cfg.price_to_eur
         logger.info(
             "  score=%d (min=%d) | strong=%s weak=%s negative=%s",
             result.score, cfg.min_score_to_notify,
@@ -167,10 +176,12 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
             )
             if verdict.available:
                 logger.info(
-                    "  LLM: chain/belt=%s | worth_sending=%s | %s",
+                    "  LLM: chain/belt=%s | worth_sending=%s | value=%d/10 | risk=%s",
                     verdict.chain_belt_status, verdict.worth_sending,
-                    verdict.summary or "(no summary)",
+                    verdict.value_score, verdict.risk_level,
                 )
+                logger.info("  LLM reasoning: %s", verdict.reasoning)
+                logger.info("  LLM price: %s", verdict.price_assessment)
                 if verdict.suspicious:
                     logger.info("  LLM suspicious: %s", verdict.suspicious)
                 if verdict.highlights:
@@ -194,22 +205,26 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
                 continue
             logger.warning("  LLM unavailable; proceeding on heuristics only")
 
-        # --- Gate: send if price OK and (LLM-worth OR strong keyword OR good deal) ---
+        # --- Gate: LLM is authoritative when available; keywords/deal are fallback only ---
         use_llm = verdict is not None and verdict.available
         if not price_ok:
             send, reason = False, (
                 f"price {ad.price} EUR above PRICE_TO_EUR={cfg.price_to_eur}"
             )
-        elif use_llm and verdict is not None and verdict.worth_sending:
-            send, reason = True, "LLM says worth sending"
-        elif keyword_ok:
-            send, reason = True, f"strong keyword signal (score {result.score})"
-        elif deal_ok:
-            send, reason = True, "good deal: " + ", ".join(deal_result.reasons)
         elif use_llm and verdict is not None:
-            send, reason = False, (
-                f"LLM not worth, no strong keyword/deal ({verdict.summary})"
-            )
+            # LLM ran successfully — its verdict is final
+            if verdict.worth_sending:
+                send, reason = True, f"LLM: worth sending (value {verdict.value_score}/10, {verdict.risk_level} risk)"
+            else:
+                send, reason = False, (
+                    f"LLM: not worth it (value {verdict.value_score}/10, {verdict.risk_level} risk) — {verdict.reasoning}"
+                )
+        elif keyword_ok:
+            # No LLM — fall back to keywords
+            send, reason = True, f"no LLM; strong keyword signal (score {result.score})"
+        elif deal_ok:
+            # No LLM — fall back to deal heuristic
+            send, reason = True, "no LLM; good deal: " + ", ".join(deal_result.reasons)
         else:
             send, reason = False, "below keyword and deal thresholds"
 

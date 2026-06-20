@@ -77,33 +77,40 @@ def format_message(
         f"Fuel: {_esc(ad.fuel or '—')}",
         f"Transmission: {_esc(ad.transmission or '—')}",
         f"Location: {_esc(ad.location or '—')}",
-        "",
-        f"Score: {result.score}",
-        "Signals:",
     ]
 
-    for hit in result.positive_hits:
-        lines.append(f"✅ {_esc(hit)}")
-    for hit in result.weak_hits:
-        lines.append(f"✅ {_esc(hit)}")
-    for hit in result.negative_hits:
-        lines.append(f"❌ {_esc(hit)} (negative signal, score reduced)")
-    lines.append("⚠️ verify with documents")
+    all_hits = result.positive_hits + result.weak_hits + result.negative_hits
+    if all_hits:
+        lines.append("")
+        lines.append(f"Keywords (score {result.score}):")
+        for hit in result.positive_hits:
+            lines.append(f"✅ {_esc(hit)}")
+        for hit in result.weak_hits:
+            lines.append(f"✅ {_esc(hit)}")
+        for hit in result.negative_hits:
+            lines.append(f"❌ {_esc(hit)}")
 
-    # Mandatory chain/belt verdict + AI assessment (when available).
+    # Expert AI assessment (when available).
     lines.append("")
     if verdict is not None and verdict.available:
+        # Chain/belt status (now secondary to overall assessment)
         lines.append(_CHAIN_LABEL.get(verdict.chain_belt_status, _CHAIN_LABEL["unclear"]))
         if verdict.chain_belt_note:
             lines.append(f"   → {_esc(verdict.chain_belt_note)}")
-        if verdict.summary:
-            lines.append(f"🧠 AI assessment: {_esc(verdict.summary)}")
+
+        # Overall expert assessment
+        lines.append(f"🧠 Expert assessment: {_esc(verdict.reasoning)}")
+        lines.append(f"💵 Price: {_esc(verdict.price_assessment)} (value {verdict.value_score}/10)")
+        risk_emoji = "🔴" if verdict.risk_level == "high" else "🟡" if verdict.risk_level == "medium" else "🟢"
+        lines.append(f"{risk_emoji} Risk level: {verdict.risk_level.title()}")
+
         for item in verdict.suspicious:
-            lines.append(f"⚠️ Suspicious: {_esc(item)}")
+            lines.append(f"⚠️ {_esc(item)}")
         for item in verdict.highlights:
-            lines.append(f"✅ Highlight: {_esc(item)}")
+            lines.append(f"⭐ {_esc(item)}")
     else:
-        # No LLM: still answer the mandatory chain question from keyword scan.
+        # No LLM: fall back to keyword-based assessment
+        lines.append("🧠 AI analysis: not available (keyword-based assessment)")
         if result.negative_hits:
             lines.append("❌ Timing chain/belt: negative signal in keywords")
         elif result.positive_hits:

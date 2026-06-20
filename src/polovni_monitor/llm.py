@@ -22,28 +22,41 @@ logger = logging.getLogger("polovni_monitor.llm")
 MAX_DESC_CHARS = 6000  # cap tokens sent to the model
 
 SYSTEM_PROMPT = (
-    "You are a careful used-car assistant. The user hunts for Citroen C5 Aircross "
-    "(1.5 BlueHDi, which uses a timing CHAIN, Serbian 'lanac') and Citroen C4 / "
-    "C4 Cactus (PureTech, which uses a wet timing BELT, Serbian 'kaiš u ulju'). "
-    "These engines are known for timing chain/belt failures, so evidence that the "
-    "chain/belt was replaced or recently serviced is the single most important "
-    "factor. HOWEVER, a car can still be worth sending even WITHOUT chain/belt "
-    "evidence if the overall package is strong (great price, low mileage, recent "
-    "year, first owner / domestic origin). Weigh the whole picture. "
-    "Listings are in Serbian. Analyze the provided listing text and reply "
-    "ONLY with a JSON object, no prose. Keep all string values in English. "
-    "Schema: {"
-    '"chain_belt_status": "yes"|"no"|"unclear" '
-    "(yes = text clearly says the chain/belt was replaced/done; no = text says it "
-    "was NOT replaced or warns about chain noise/problems; unclear = not mentioned), "
-    '"chain_belt_note": string (one short sentence quoting/paraphrasing the evidence, '
-    "or 'not mentioned in the ad'), "
-    '"worth_sending": boolean (true if this is a promising candidate worth a closer '
-    "look), "
-    '"summary": string (1-2 sentence overall impression), '
-    '"suspicious": [string] (red flags, e.g. vague wording, accident, "rezervisan", '
-    "odometer doubts; empty list if none), "
-    '"highlights": [string] (notable positives; empty list if none)'
+    "You are an expert used-car appraiser helping find a good Citroen C5 Aircross "
+    "1.5 BlueHDi (diesel, automatic). This engine uses a timing CHAIN (Serbian: "
+    "'lanac') known for stretch/failure if neglected — service history matters a lot.\n\n"
+    "You are selective but fair. Mark 'worth_sending' true when the car is a solid "
+    "buy: reasonable price for its year and mileage, decent condition, no serious red "
+    "flags. You don't need perfection — a 2020 with 130k km can be worth sending if "
+    "the price is right and the service history is decent. A 2021 with 80k km and "
+    "chain work done is obviously worth sending. Use your judgement.\n\n"
+    "Key evaluation criteria:\n"
+    "- **Price vs. market** (budget up to 13500 EUR): 2021+ under 100k km → fair ~11-13k. "
+    "2019-2020 with 100-150k km → fair ~9-12k. 2019-2020 with 150k+ km → fair ~8-10k. "
+    "Noticeably above these bands = overpriced.\n"
+    "- **Mileage**: Under 100k = good. 100-150k = acceptable for diesel if serviced. "
+    "Over 170k without documented chain service = high risk.\n"
+    "- **Service history**: Documented service or chain replacement = strong positive. "
+    "Vague claims with no records = neutral. Known neglect = negative.\n"
+    "- **Condition signals**: First owner, no accidents, domestic car = positives. "
+    "Accident damage, 'rezervisan', odometer doubts = red flags.\n"
+    "- **Equipment**: Shine/Feel/Max trim, EAT8 gearbox, panoramic roof, adaptive "
+    "cruise, heated seats = add real value.\n\n"
+    "Listings are in Serbian. Analyze the provided listing and reply ONLY with a "
+    "JSON object, no prose. Keep all string values in English. Schema: {"
+    '"chain_belt_status": "yes"|"no"|"unclear", '
+    '"chain_belt_note": string (one sentence on chain/belt evidence, or "not mentioned"), '
+    '"worth_sending": boolean (true ONLY if worth serious consideration - '
+    'would YOU buy it? strict: chain done or perfect, excellent value, no red flags), '
+    '"reasoning": string (2-3 sentences explaining the decision: price/mileage/year '
+    "trade-off, equipment, service history, risk factors), "
+    '"price_assessment": string (e.g. "fair for mileage", "good for year", "overpriced"'
+    '), "value_score": number (1-10: how good is the value at THIS price; 1=poor, '
+    '10=excellent), '
+    '"risk_level": "low"|"medium"|"high" (likelihood of major issues given available '
+    "info), "
+    '"suspicious": [string] (red flags; empty list if none), '
+    '"highlights": [string] (standout positives; empty list if none)'
     "}"
 )
 
@@ -53,7 +66,10 @@ class LlmVerdict:
     chain_belt_status: str  # "yes" | "no" | "unclear"
     chain_belt_note: str
     worth_sending: bool
-    summary: str
+    reasoning: str  # Why send or not
+    price_assessment: str  # Fair/overpriced/good value etc
+    value_score: int  # 1-10
+    risk_level: str  # "low" | "medium" | "high"
     suspicious: list[str] = field(default_factory=list)
     highlights: list[str] = field(default_factory=list)
     available: bool = True  # False => analysis could not be produced
@@ -104,12 +120,29 @@ def parse_verdict(text: str) -> LlmVerdict:
     status = str(data.get("chain_belt_status", "unclear")).lower().strip()
     if status not in {"yes", "no", "unclear"}:
         status = "unclear"
+
+    risk = str(data.get("risk_level", "medium")).lower().strip()
+    if risk not in {"low", "medium", "high"}:
+        risk = "medium"
+
+    # Parse value_score as an int, default to 5 (neutral)
+    try:
+        value_score = int(data.get("value_score", 5))
+        value_score = max(1, min(10, value_score))  # Clamp to 1-10
+    except (ValueError, TypeError):
+        value_score = 5
+
     return LlmVerdict(
         chain_belt_status=status,
         chain_belt_note=str(data.get("chain_belt_note", "")).strip()
         or "not mentioned in the ad",
         worth_sending=bool(data.get("worth_sending", False)),
-        summary=str(data.get("summary", "")).strip(),
+        reasoning=str(data.get("reasoning", "")).strip()
+        or "No detailed reasoning provided",
+        price_assessment=str(data.get("price_assessment", "")).strip()
+        or "fair price",
+        value_score=value_score,
+        risk_level=risk,
         suspicious=_coerce_list(data.get("suspicious")),
         highlights=_coerce_list(data.get("highlights")),
     )
@@ -152,7 +185,6 @@ def analyze_listing(
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},
-            temperature=0.2,
         )
         content = resp.choices[0].message.content or "{}"
         logger.info("LLM raw response for %s:\n%s", ad.ad_id, content)
@@ -174,6 +206,9 @@ def analyze_listing(
             chain_belt_status="unclear",
             chain_belt_note="LLM analysis unavailable",
             worth_sending=False,
-            summary="",
+            reasoning="LLM analysis failed — falling back to heuristics",
+            price_assessment="unknown",
+            value_score=5,
+            risk_level="medium",
             available=False,
         )
