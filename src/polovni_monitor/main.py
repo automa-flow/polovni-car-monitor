@@ -205,34 +205,32 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
                 continue
             logger.warning("  LLM unavailable; proceeding on heuristics only")
 
-        # --- Always send; mark if interesting (worth a closer look) ---
+        # --- Always send every listing; mark the genuinely interesting ones ---
+        # Price is no longer a hard filter — over-budget cars are still sent,
+        # just never flagged as "interesting" (don't-miss). Interesting requires
+        # the price to be within budget AND a positive signal.
         use_llm = verdict is not None and verdict.available
+        send = True
         interesting = False
 
         if not price_ok:
-            # Skip if price too high
-            send, reason = False, (
-                f"price {ad.price} EUR above PRICE_TO_EUR={cfg.price_to_eur}"
-            )
-        else:
-            # Always send, but mark if interesting
-            send = True
-            if use_llm and verdict is not None:
-                if verdict.worth_sending:
-                    interesting = True
-                    reason = f"LLM: worth sending (value {verdict.value_score}/10, {verdict.risk_level} risk)"
-                else:
-                    reason = (
-                        f"LLM: not compelling (value {verdict.value_score}/10, {verdict.risk_level} risk)"
-                    )
-            elif keyword_ok:
+            reason = f"over budget ({ad.price} EUR > {cfg.price_to_eur}) — informational"
+        elif use_llm and verdict is not None:
+            if verdict.worth_sending:
                 interesting = True
-                reason = f"strong keyword signal (score {result.score})"
-            elif deal_ok:
-                interesting = True
-                reason = "good deal: " + ", ".join(deal_result.reasons)
+                reason = f"LLM: worth sending (value {verdict.value_score}/10, {verdict.risk_level} risk)"
             else:
-                reason = "informational"
+                reason = (
+                    f"LLM: not compelling (value {verdict.value_score}/10, {verdict.risk_level} risk)"
+                )
+        elif keyword_ok:
+            interesting = True
+            reason = f"strong keyword signal (score {result.score})"
+        elif deal_ok:
+            interesting = True
+            reason = "good deal: " + ", ".join(deal_result.reasons)
+        else:
+            reason = "informational"
 
         db.save_ad(
             conn, ad_id, ad_url, ad.title, ts, chash, result.score,

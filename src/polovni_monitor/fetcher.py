@@ -187,10 +187,21 @@ class PlaywrightFetcher:
         return any(m in title for m in _CHALLENGE_TITLE_MARKERS)
 
     def close(self) -> None:
+        # The browser/context may already be gone (e.g. the visible window was
+        # closed mid-run, or it crashed). Closing it again then raises
+        # TargetClosedError — swallow it so a clean shutdown never crashes the
+        # process with a non-zero exit code.
         try:
             self._context.close()  # persistent context owns the browser
+        except Exception as exc:
+            logger.warning("Browser context already closed: %s: %s",
+                           type(exc).__name__, exc)
         finally:
-            self._pw.stop()
+            try:
+                self._pw.stop()
+            except Exception as exc:
+                logger.warning("Playwright stop failed: %s: %s",
+                               type(exc).__name__, exc)
 
 
 def build_fetcher(cfg: Config) -> Fetcher:
