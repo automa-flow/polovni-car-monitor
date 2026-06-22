@@ -141,14 +141,6 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
             ad.transmission or "?",
         )
 
-        # Skip manual transmissions (only automatic)
-        if ad.transmission and "manuelni" in ad.transmission.lower():
-            logger.info("  => skip: manual transmission (only automatic accepted)")
-            db.save_ad(conn, ad_id, ad_url, ad.title, ts, "", 0, notified=0, price=ad.price)
-            conn.commit()
-            time.sleep(cfg.request_delay_sec)
-            continue
-
         result = analyze_text(f"{ad.description}\n{ad.title or ''}", keywords)
         chash = _content_hash(ad.description)
         price_ok = ad.price is None or ad.price <= cfg.price_to_eur
