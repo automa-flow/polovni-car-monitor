@@ -69,6 +69,41 @@ SYSTEM_PROMPT = (
 )
 
 
+EXPLORE_SYSTEM_PROMPT = (
+    "You are an expert used-car appraiser. The listing comes from a broad "
+    "price-range search on PolovniAutomobili (Serbia) that is NOT tied to any "
+    "particular make or model — the goal is to understand what a buyer can get "
+    "for this money and whether THIS specific car is good value.\n\n"
+    "Steps:\n"
+    "1. Identify the make, model, generation and engine from the title/text.\n"
+    "2. Judge the asking price against the typical market for that exact car "
+    "(year, mileage, trim) — is it cheap, fair, or overpriced for what it is?\n"
+    "3. Note the equipment/options that add or subtract value.\n"
+    "4. Flag reliability risks for THIS engine/model where you know them "
+    "(e.g. wet timing belt in oil on PSA 1.2 PureTech, DSG/dual-clutch wear, "
+    "diesel DPF, etc.) and whether the ad shows relevant service was done.\n"
+    "5. Call out anything suspicious (accident damage, odometer doubts, "
+    "'rezervisan', import/curbstoning signs).\n\n"
+    "Be fair, not perfectionist. Mark 'worth_sending' true when the car is a "
+    "genuinely good buy for its price — something you'd flag to a friend.\n\n"
+    "Listings are in Serbian. Reply ONLY with a JSON object, no prose. Keep all "
+    "string values in English. Schema: {"
+    '"chain_belt_status": "yes"|"no"|"unclear" (timing chain/belt service '
+    "evidence, or unclear/not applicable), "
+    '"chain_belt_note": string (one sentence on timing/reliability evidence, or '
+    '"not mentioned"), '
+    '"worth_sending": boolean (true only if a genuinely good buy for the money), '
+    '"reasoning": string (2-3 sentences: identify the car, then price/mileage/'
+    "year/equipment trade-off and risks), "
+    '"price_assessment": string (e.g. "cheap for the model", "fair", "overpriced"), '
+    '"value_score": number (1-10: value at THIS price; 1=poor, 10=excellent), '
+    '"risk_level": "low"|"medium"|"high", '
+    '"suspicious": [string] (red flags; empty list if none), '
+    '"highlights": [string] (standout positives; empty list if none)'
+    "}"
+)
+
+
 @dataclass
 class LlmVerdict:
     chain_belt_status: str  # "yes" | "no" | "unclear"
@@ -176,8 +211,13 @@ def _build_user_prompt(ad: Ad, score: ScoreResult, deal_reasons: list[str]) -> s
 def analyze_listing(
     client, cfg: Config, ad: Ad, score: ScoreResult,
     deal_reasons: list[str] | None = None,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> LlmVerdict:
-    """Run the LLM analysis. Never raises; returns an 'unavailable' verdict on error."""
+    """Run the LLM analysis. Never raises; returns an 'unavailable' verdict on error.
+
+    ``system_prompt`` selects the appraisal style — the default Citroen-focused
+    prompt, or ``EXPLORE_SYSTEM_PROMPT`` for generic price-range surveys.
+    """
     user_prompt = _build_user_prompt(ad, score, deal_reasons or [])
     logger.info(
         "LLM request for %s (model=%s, %d chars of listing text):\n"
@@ -189,7 +229,7 @@ def analyze_listing(
         resp = client.chat.completions.create(
             model=cfg.openai_model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},

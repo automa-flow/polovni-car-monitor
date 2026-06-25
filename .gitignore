@@ -1,6 +1,7 @@
 # secrets / local config
 .env
 config/search_urls.txt
+config/explore_urls.txt
 
 # database & local data
 data/*.db

@@ -138,6 +138,27 @@ See `config/search_urls.example.txt` for an example.
 
 ---
 
+## Price-range "explore" searches (`config/explore_urls.txt`)
+
+Besides the model-specific list above, you can add **broad price-range URLs**
+that are *not* tied to any make/model — e.g. "anything 10000–14000 EUR, 2019+,
+automatic". For each new listing the monitor runs a generic LLM appraisal
+(make/model/generation, price vs. market, equipment, value, risk) and posts it.
+
+The point is to discover *what cars and options turn up at a given budget*,
+not to watch one model.
+
+- Paste broad URLs (leave make/model empty) into `config/explore_urls.txt`,
+  one per line — see `config/explore_urls.example.txt`.
+- The **first pass records everything silently** (so a broad search matching
+  hundreds of cars doesn't flood Telegram). This happens regardless of the
+  global `SEED_ON_FIRST_RUN` setting.
+- From then on, only **newly appeared** listings are posted.
+
+You can use the model list, the explore list, or both at once.
+
+---
+
 ## Settings (`.env`)
 
 | Variable             | Purpose                                                           |
@@ -295,6 +316,7 @@ polovni-car-monitor/
   run.bat
   config/
     search_urls.example.txt
+    explore_urls.example.txt
     keywords.json
   src/polovni_monitor/
     __init__.py

@@ -1,0 +1,19 @@
+# Price-range "explore" searches — one URL per line.
+# Empty lines and lines starting with # are ignored.
+#
+# Unlike config/search_urls.txt, these are NOT tied to a make/model. The idea
+# is to survey a whole price band: "what cars and options can I get for this
+# money?". Every NEW listing that turns up gets a generic LLM appraisal
+# (make/model/generation, price vs. market, equipment, value, risk).
+#
+# On the very first pass everything found is recorded silently; from then on
+# only newly appeared listings are posted to Telegram.
+#
+# How to get a URL:
+#   1. Open https://www.polovniautomobili.com
+#   2. Set ONLY broad filters (price range, year, maybe body type/fuel) —
+#      leave make/model empty.
+#   3. Copy the results page URL and paste it here.
+
+# Example: anything 10000-14000 EUR, 2019+, automatic
+# https://www.polovniautomobili.com/auto-oglasi/pretraga?gearBox[]=automatic&priceFrom=10000&priceTo=14000&sort=basic&yearFrom=2019

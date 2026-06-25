@@ -58,10 +58,18 @@ def format_message(
     verdict: LlmVerdict | None = None,
     deal: DealResult | None = None,
     interesting: bool = False,
+    explore: bool = False,
 ) -> str:
-    """Build the notification text for a listing."""
+    """Build the notification text for a listing.
+
+    ``explore`` switches to the generic price-range-survey layout: a neutral
+    header, no Citroen-specific title fallback, and the timing chain/belt line
+    is only shown when the LLM actually found relevant evidence.
+    """
     if tag == "updated":
         header = "🔁 Updated listing"
+    elif explore:
+        header = "🔎 New in price range"
     elif interesting:
         header = "🔥 DON'T MISS! Interesting listing found"
     else:
@@ -70,10 +78,11 @@ def format_message(
     price = f"{_fmt_int(ad.price)} €" if ad.price is not None else "not detected"
     mileage = f"{_fmt_int(ad.mileage)} km" if ad.mileage is not None else "—"
 
+    title_fallback = "(no title)" if explore else "Citroen (no title)"
     lines = [
         f"<b>{header}</b>",
         "",
-        f"<b>{_esc(ad.title or 'Citroen (no title)')}</b>",
+        f"<b>{_esc(ad.title or title_fallback)}</b>",
         f"Price: {price}",
         f"Year: {ad.year if ad.year is not None else '—'}",
         f"Mileage: {mileage}",
@@ -96,10 +105,17 @@ def format_message(
     # Expert AI assessment (when available).
     lines.append("")
     if verdict is not None and verdict.available:
-        # Chain/belt status (now secondary to overall assessment)
-        lines.append(_CHAIN_LABEL.get(verdict.chain_belt_status, _CHAIN_LABEL["unclear"]))
-        if verdict.chain_belt_note:
-            lines.append(f"   → {_esc(verdict.chain_belt_note)}")
+        # Chain/belt status. In explore mode the search isn't model-specific, so
+        # only surface it when the LLM actually found relevant evidence rather
+        # than printing a "not mentioned" line on every car.
+        if not explore:
+            lines.append(_CHAIN_LABEL.get(verdict.chain_belt_status, _CHAIN_LABEL["unclear"]))
+            if verdict.chain_belt_note:
+                lines.append(f"   → {_esc(verdict.chain_belt_note)}")
+        elif verdict.chain_belt_status in ("yes", "no"):
+            lines.append(_CHAIN_LABEL[verdict.chain_belt_status])
+            if verdict.chain_belt_note:
+                lines.append(f"   → {_esc(verdict.chain_belt_note)}")
 
         # Overall expert assessment
         lines.append(f"🧠 Expert assessment: {_esc(verdict.reasoning)}")
@@ -111,6 +127,9 @@ def format_message(
             lines.append(f"⚠️ {_esc(item)}")
         for item in verdict.highlights:
             lines.append(f"⭐ {_esc(item)}")
+    elif explore:
+        # Generic survey, no LLM: keyword scoring is Citroen-specific, so skip it.
+        lines.append("🧠 AI analysis: not available")
     else:
         # No LLM: fall back to keyword-based assessment
         lines.append("🧠 AI analysis: not available (keyword-based assessment)")

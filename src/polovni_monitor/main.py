@@ -15,9 +15,10 @@ from polovni_monitor.config import (
     KEYWORDS_FILE,
     Config,
     load_config,
+    load_explore_urls,
     load_search_urls,
 )
-from polovni_monitor.scoring import analyze_text, load_keywords
+from polovni_monitor.scoring import ScoreResult, analyze_text, load_keywords
 from polovni_monitor.utils import normalize_text, setup_logging
 
 logger = logging.getLogger("polovni_monitor")
@@ -54,11 +55,13 @@ def _collect_ads(cfg: Config, fetch, urls: list[str]) -> dict[str, str]:
 
 def scan_once(cfg: Config) -> int:
     """One monitoring pass. Returns the number of notifications sent."""
-    urls = load_search_urls()
-    if not urls:
+    model_urls = load_search_urls()
+    explore_urls = load_explore_urls()
+    if not model_urls and not explore_urls:
         logger.error(
-            "No search URLs. Fill in config/search_urls.txt "
-            "(see config/search_urls.example.txt)."
+            "No search URLs. Fill in config/search_urls.txt and/or "
+            "config/explore_urls.txt "
+            "(see the matching *.example.txt files)."
         )
         return 0
 
@@ -69,7 +72,12 @@ def scan_once(cfg: Config) -> int:
     llm_client = llm.build_client(cfg)
 
     try:
-        return _scan(cfg, conn, fetch, keywords, llm_client)
+        notified = 0
+        if model_urls:
+            notified += _scan(cfg, conn, fetch, keywords, llm_client)
+        if explore_urls:
+            notified += _scan_explore(cfg, conn, fetch, llm_client, explore_urls)
+        return notified
     finally:
         fetch.close()
         conn.close()
@@ -247,6 +255,125 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
     logger.info(
         "Pass complete. New listings examined: %d, notifications sent: %d.",
         examined, notified,
+    )
+    return notified
+
+
+def _explore_excerpt(description: str, radius: int = 220) -> str:
+    """A short, normalized snippet of the listing text for the Telegram message."""
+    snippet = normalize_text(description).strip()
+    if len(snippet) > radius:
+        snippet = snippet[:radius].rstrip() + "…"
+    return snippet
+
+
+def _scan_explore(cfg: Config, conn, fetch, llm_client, urls: list[str]) -> int:
+    """Price-range survey pass (not tied to a make/model).
+
+    Mirrors the seed-then-notify behaviour of the model scan, but with its own
+    independent first-run flag (``explore_seeded`` in meta) so adding explore
+    URLs to an already-populated database doesn't flood Telegram. On the first
+    pass every listing is recorded silently; afterwards each newly appeared
+    listing gets a generic LLM appraisal and is posted.
+    """
+    logger.info("=== Explore (price-range) pass ===")
+    found = _collect_ads(cfg, fetch, urls)
+    logger.info("Explore: listings found in results: %d", len(found))
+    if not found:
+        return 0
+
+    # The explore pass always seeds on its first run (independent of the global
+    # SEED_ON_FIRST_RUN flag): record everything silently, then only post
+    # newly-appeared listings on later passes. This avoids flooding Telegram
+    # when broad price-range URLs first match hundreds of cars.
+    ts = int(time.time())
+    seeded = db.get_meta(conn, "explore_seeded")
+    if not seeded:
+        for ad_id, ad_url in found.items():
+            db.seed_ad(conn, ad_id, ad_url, None, ts)
+        db.set_meta(conn, "explore_seeded", "1")
+        conn.commit()
+        logger.info(
+            "Explore first run (SEED): remembered %d listings, no notifications sent.",
+            len(found),
+        )
+        return 0
+
+    new_listings: dict[str, str] = {}
+    for ad_id, ad_url in found.items():
+        if db.get_ad(conn, ad_id) is None:
+            new_listings[ad_id] = ad_url
+        else:
+            db.touch_ad(conn, ad_id, ts)
+    conn.commit()
+    logger.info(
+        "Explore: %d known listing(s) skipped; %d new to appraise.",
+        len(found) - len(new_listings), len(new_listings),
+    )
+
+    notified = 0
+    total = len(new_listings)
+    for idx, (ad_id, ad_url) in enumerate(new_listings.items(), start=1):
+        logger.info("[explore %d/%d] Appraising NEW listing %s", idx, total, ad_id)
+        try:
+            html = fetch.get(ad_url)
+        except Exception as exc:
+            logger.error("  -> failed to load listing %s: %s: %s",
+                         ad_id, type(exc).__name__, exc)
+            time.sleep(cfg.request_delay_sec)
+            continue
+
+        ad = parser.parse_ad(html, ad_url, ad_id)
+        logger.info(
+            "  parsed: %s | price=%s year=%s mileage=%s fuel=%s trans=%s",
+            (ad.title or "—")[:70],
+            f"{ad.price} EUR" if ad.price is not None else "?",
+            ad.year if ad.year is not None else "?",
+            f"{ad.mileage} km" if ad.mileage is not None else "?",
+            ad.fuel or "?", ad.transmission or "?",
+        )
+
+        result = ScoreResult(score=0, excerpt=_explore_excerpt(ad.description))
+        chash = _content_hash(ad.description)
+
+        verdict = None
+        if llm_client is not None:
+            logger.info("  running explore LLM appraisal (model=%s)...", cfg.openai_model)
+            verdict = llm.analyze_listing(
+                llm_client, cfg, ad, result,
+                system_prompt=llm.EXPLORE_SYSTEM_PROMPT,
+            )
+            if verdict.available:
+                logger.info(
+                    "  LLM: worth_sending=%s | value=%d/10 | risk=%s | %s",
+                    verdict.worth_sending, verdict.value_score,
+                    verdict.risk_level, verdict.price_assessment,
+                )
+                logger.info("  LLM reasoning: %s", verdict.reasoning)
+            else:
+                logger.warning("  LLM unavailable; sending without appraisal")
+
+        # Record before sending so a crash mid-send doesn't re-post next pass.
+        db.save_ad(
+            conn, ad_id, ad_url, ad.title, ts, chash, 0,
+            notified=1, price=ad.price,
+        )
+
+        text = telegram.format_message(ad, result, "new", verdict, explore=True)
+        if telegram.send_message(cfg, text, telegram.listing_button(ad_url)):
+            notified += 1
+            logger.info("  => notification delivered")
+        else:
+            logger.warning("  => Telegram send failed")
+
+        conn.commit()
+        time.sleep(cfg.request_delay_sec)
+
+    db.set_meta(conn, "explore_last_pass_ts", str(ts))
+    conn.commit()
+    logger.info(
+        "Explore pass complete. New listings appraised: %d, notifications sent: %d.",
+        total, notified,
     )
     return notified
 

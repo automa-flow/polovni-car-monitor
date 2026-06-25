@@ -13,6 +13,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
 
 SEARCH_URLS_FILE = CONFIG_DIR / "search_urls.txt"
+EXPLORE_URLS_FILE = CONFIG_DIR / "explore_urls.txt"
 KEYWORDS_FILE = CONFIG_DIR / "keywords.json"
 ENV_FILE = PROJECT_ROOT / ".env"
 DB_PATH = DATA_DIR / "ads.db"
@@ -146,14 +147,28 @@ def load_config() -> Config:
     )
 
 
-def load_search_urls() -> list[str]:
-    """Read the list of search URLs from config/search_urls.txt."""
-    if not SEARCH_URLS_FILE.exists():
+def _read_url_file(path: Path) -> list[str]:
+    """Read a URL-per-line file, skipping blanks and '#' comments."""
+    if not path.exists():
         return []
     urls: list[str] = []
-    for line in SEARCH_URLS_FILE.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         urls.append(line)
     return urls
+
+
+def load_search_urls() -> list[str]:
+    """Read the list of model-specific search URLs from config/search_urls.txt."""
+    return _read_url_file(SEARCH_URLS_FILE)
+
+
+def load_explore_urls() -> list[str]:
+    """Read the price-range "explore" search URLs from config/explore_urls.txt.
+
+    These are not tied to a make/model — they survey whatever turns up in a
+    given price band, with a generic LLM appraisal attached.
+    """
+    return _read_url_file(EXPLORE_URLS_FILE)
