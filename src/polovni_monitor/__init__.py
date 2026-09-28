@@ -1,3 +1,3 @@
-"""Personal low-frequency monitor for PolovniAutomobili listings."""
+"""Personal, low-frequency monitor for PolovniAutomobili listings (unofficial)."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

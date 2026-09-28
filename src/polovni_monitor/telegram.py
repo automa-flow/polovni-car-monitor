@@ -120,7 +120,7 @@ def format_message(
         # Overall expert assessment
         lines.append(f"🧠 Expert assessment: {_esc(verdict.reasoning)}")
         lines.append(f"💵 Price: {_esc(verdict.price_assessment)} (value {verdict.value_score}/10)")
-        risk_emoji = "🔴" if verdict.risk_level == "high" else "🟡" if verdict.risk_level == "medium" else "🟢"
+        risk_emoji = {"high": "🔴", "medium": "🟡"}.get(verdict.risk_level, "🟢")
         lines.append(f"{risk_emoji} Risk level: {verdict.risk_level.title()}")
 
         for item in verdict.suspicious:

@@ -1,28 +1,49 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "polovni-car-monitor"
-version = "0.1.0"
-description = "Personal low-frequency monitor for PolovniAutomobili listings with Telegram alerts."
+version = "0.2.0"
+description = "Personal, low-frequency monitor for used-car listings on PolovniAutomobili with Telegram alerts. Unofficial."
 readme = "README.md"
-requires-python = ">=3.9"
-license = { text = "MIT" }
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Vadakuma" }]
+keywords = ["used-cars", "serbia", "telegram-bot", "playwright", "monitoring"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Utilities",
+]
 dependencies = [
     "requests>=2.31",
     "beautifulsoup4>=4.12",
     "python-dotenv>=1.0",
-    # Real browser backend to render JS and clear Cloudflare's standard JS check.
+    # Real-browser backend that renders the site's JavaScript.
     # After installing, also run: python -m playwright install chromium
-    "playwright==1.40.0",
+    "playwright>=1.49",
     # Optional LLM analysis (only used when OPENAI_API_KEY is set).
-    "openai>=1.0",
+    "openai>=1.40",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/automa-flow/polovni-car-monitor"
+Issues = "https://github.com/automa-flow/polovni-car-monitor/issues"
+Changelog = "https://github.com/automa-flow/polovni-car-monitor/blob/main/CHANGELOG.md"
 
 [project.scripts]
 polovni-monitor = "polovni_monitor.main:main"
@@ -33,3 +54,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

@@ -19,11 +19,16 @@ venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
+dist/
 .pytest_cache/
+.ruff_cache/
 
-# local debug artifacts
+# local debug artifacts — saved pages contain sellers' personal data and the
+# site's content; never commit them (tests use a synthetic fixture instead)
 debug_*.py
 debug_*.html
+*.saved.html
 
 # persistent playwright browser profile (cookies/cache)
 data/.pw-profile/

@@ -2,10 +2,7 @@
 # This installs the package itself (editable) plus the dev/test extras, so the
 # `polovni-monitor` command and `import polovni_monitor` work without PYTHONPATH.
 #
-# After installing, also run the one-time browser download:
+# Requires Python 3.11+. After installing, also run the one-time browser
+# download:
 #   python -m playwright install chromium
-#
-# Note: playwright is pinned to 1.40.0 in pyproject so its greenlet==3.0.1 dep
-# has a prebuilt wheel on Python 3.9 (newer Playwright builds from source / needs
-# MSVC). On Python 3.11+ you can relax that pin.
 -e .[dev]

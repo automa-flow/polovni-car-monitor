@@ -1,16 +1,33 @@
 @echo off
-REM Run the bot on Windows.
+REM Run the monitor on Windows. Requires Python 3.11+.
 setlocal
 cd /d "%~dp0"
 
 if not exist .venv (
   echo ==^> Creating virtual environment .venv
-  python -m venv .venv
+  where py >nul 2>nul
+  if errorlevel 1 (
+    python -m venv .venv
+  ) else (
+    py -3 -m venv .venv
+  )
+)
+
+if not exist .venv\Scripts\python.exe (
+  echo Could not create .venv. Install Python 3.11+ from https://www.python.org/downloads/
+  exit /b 1
+)
+
+.venv\Scripts\python.exe -c "import sys; sys.exit(sys.version_info < (3, 11))"
+if errorlevel 1 (
+  echo .venv was created with Python older than 3.11.
+  echo Delete the .venv folder and run this script again.
+  exit /b 1
 )
 
 call .venv\Scripts\activate.bat
 
-echo ==^> Upgrading pip ^(needed for prebuilt wheels^)
+echo ==^> Upgrading pip
 python -m pip install -q --upgrade pip
 
 echo ==^> Installing dependencies
@@ -29,11 +46,10 @@ if not exist .env (
   copy /Y .env.example .env >nul
 )
 
-set PYTHONPATH=src
 set COMMAND=%1
 if "%COMMAND%"=="" set COMMAND=run
 
-echo ==^> Running: polovni_monitor %COMMAND%
+echo ==^> Running: polovni-monitor %COMMAND%
 python -m polovni_monitor %COMMAND%
 
 endlocal

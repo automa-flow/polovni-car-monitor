@@ -11,10 +11,10 @@ from .utils import normalize_text
 # Compiled word-boundary matchers, cached by phrase. Using look-arounds (not
 # plain substring) so e.g. the strong term "razvod" does not match inside
 # "razvodni", and "lanac" does not match inside an unrelated longer word.
-_PHRASE_RE_CACHE: dict[str, "re.Pattern[str]"] = {}
+_PHRASE_RE_CACHE: dict[str, re.Pattern[str]] = {}
 
 
-def _phrase_re(phrase: str) -> "re.Pattern[str]":
+def _phrase_re(phrase: str) -> re.Pattern[str]:
     pat = _PHRASE_RE_CACHE.get(phrase)
     if pat is None:
         pat = re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)")
