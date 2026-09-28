@@ -1,11 +1,15 @@
 """Optional OpenAI-powered listing analysis.
 
 Given a parsed listing, ask an LLM to judge whether it's worth sending, flag
-anything suspicious, and — most importantly — state clearly whether the timing
-chain/belt replacement is mentioned (the core question from the task).
+anything suspicious, and state clearly whether the timing chain/belt
+replacement is mentioned.
 
 The whole module is optional: if the ``openai`` package or an API key is
 missing, or a request fails, the caller falls back to keyword scoring.
+
+Privacy: the listing text is sent to the configured API provider. Contact
+details are already masked by the parser; the full prompt and the raw
+response are only logged at DEBUG level.
 """
 from __future__ import annotations
 
@@ -219,7 +223,7 @@ def analyze_listing(
     prompt, or ``EXPLORE_SYSTEM_PROMPT`` for generic price-range surveys.
     """
     user_prompt = _build_user_prompt(ad, score, deal_reasons or [])
-    logger.info(
+    logger.debug(
         "LLM request for %s (model=%s, %d chars of listing text):\n"
         "----- prompt sent to AI -----\n%s\n----- end prompt -----",
         ad.ad_id, cfg.openai_model, min(len(ad.description), MAX_DESC_CHARS),
@@ -235,7 +239,7 @@ def analyze_listing(
             response_format={"type": "json_object"},
         )
         content = resp.choices[0].message.content or "{}"
-        logger.info("LLM raw response for %s:\n%s", ad.ad_id, content)
+        logger.debug("LLM raw response for %s:\n%s", ad.ad_id, content)
         verdict = parse_verdict(content)
         usage = getattr(resp, "usage", None)
         if usage is not None:

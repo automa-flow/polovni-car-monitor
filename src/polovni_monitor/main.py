@@ -74,7 +74,7 @@ def scan_once(cfg: Config) -> int:
     try:
         notified = 0
         if model_urls:
-            notified += _scan(cfg, conn, fetch, keywords, llm_client)
+            notified += _scan(cfg, conn, fetch, keywords, llm_client, model_urls)
         if explore_urls:
             notified += _scan_explore(cfg, conn, fetch, llm_client, explore_urls)
         return notified
@@ -83,10 +83,10 @@ def scan_once(cfg: Config) -> int:
         conn.close()
 
 
-def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
+def _scan(cfg: Config, conn, fetch, keywords, llm_client, urls: list[str]) -> int:
     seeding = cfg.seed_on_first_run and db.count_ads(conn) == 0
 
-    found = _collect_ads(cfg, fetch, load_search_urls())
+    found = _collect_ads(cfg, fetch, urls)
     logger.info("Listings found in results: %d", len(found))
 
     if seeding:
@@ -102,7 +102,7 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
 
     # Brand-new listing IDs are fully analyzed. Known IDs are normally skipped
     # (just refresh last_seen) to keep each pass to a handful of requests and
-    # reduce Cloudflare friction — except those due for a price re-check, which
+    # the load on the site low — except those due for a price re-check, which
     # are re-fetched to detect price drops.
     ts = int(time.time())
     new_listings: dict[str, str] = {}
@@ -205,24 +205,22 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
                 continue
             logger.warning("  LLM unavailable; proceeding on heuristics only")
 
-        # --- Always send every listing; mark the genuinely interesting ones ---
-        # Price is no longer a hard filter — over-budget cars are still sent,
+        # --- Every new listing is sent; the genuinely interesting ones are
+        # flagged. Price is not a hard filter — over-budget cars are still sent,
         # just never flagged as "interesting" (don't-miss). Interesting requires
         # the price to be within budget AND a positive signal.
         use_llm = verdict is not None and verdict.available
-        send = True
         interesting = False
 
         if not price_ok:
             reason = f"over budget ({ad.price} EUR > {cfg.price_to_eur}) — informational"
         elif use_llm and verdict is not None:
+            summary = f"value {verdict.value_score}/10, {verdict.risk_level} risk"
             if verdict.worth_sending:
                 interesting = True
-                reason = f"LLM: worth sending (value {verdict.value_score}/10, {verdict.risk_level} risk)"
+                reason = f"LLM: worth sending ({summary})"
             else:
-                reason = (
-                    f"LLM: not compelling (value {verdict.value_score}/10, {verdict.risk_level} risk)"
-                )
+                reason = f"LLM: not compelling ({summary})"
         elif keyword_ok:
             interesting = True
             reason = f"strong keyword signal (score {result.score})"
@@ -234,19 +232,19 @@ def _scan(cfg: Config, conn, fetch, keywords, llm_client) -> int:
 
         db.save_ad(
             conn, ad_id, ad_url, ad.title, ts, chash, result.score,
-            notified=1 if send else 0, price=ad.price,
+            notified=1, price=ad.price,
         )
 
-        if send:
-            logger.info("  => SEND to Telegram: %s%s", reason, " (INTERESTING)" if interesting else "")
-            text = telegram.format_message(ad, result, "new", verdict, deal_result, interesting=interesting)
-            if telegram.send_message(cfg, text, telegram.listing_button(ad_url)):
-                notified += 1
-                logger.info("  => notification delivered")
-            else:
-                logger.warning("  => Telegram send failed")
+        logger.info("  => SEND to Telegram: %s%s", reason,
+                    " (INTERESTING)" if interesting else "")
+        text = telegram.format_message(
+            ad, result, "new", verdict, deal_result, interesting=interesting
+        )
+        if telegram.send_message(cfg, text, telegram.listing_button(ad_url)):
+            notified += 1
+            logger.info("  => notification delivered")
         else:
-            logger.info("  => skip: %s", reason)
+            logger.warning("  => Telegram send failed")
 
         time.sleep(cfg.request_delay_sec)
 
@@ -531,8 +529,8 @@ def cmd_export(cfg: Config, path: Path) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="polovni_monitor",
-        description="Personal monitor for PolovniAutomobili listings.",
+        prog="polovni-monitor",
+        description="Personal, low-frequency monitor for PolovniAutomobili listings (unofficial).",
     )
     sub = p.add_subparsers(dest="command")
     sub.add_parser("run", help="Continuous monitoring.")

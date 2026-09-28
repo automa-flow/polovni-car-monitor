@@ -1,8 +1,9 @@
 """Fetch and parse PolovniAutomobili pages.
 
 Only basic listing data: link, title, price, year, mileage, fuel,
-transmission, location, and the description text. No seller contacts / phone
-numbers.
+transmission, location, and the description text. Seller contact details are
+never extracted, and phone numbers / e-mails that sellers type into the
+description are masked (see ``utils.redact_contacts``).
 
 Structured fields (year/mileage/fuel/transmission) are read from the listing's
 labeled spec block first ("Godište: 2020.", "Kilometraža: 146.930 km", …), and
@@ -20,13 +21,16 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from . import __version__
 from .models import Ad
-from .utils import normalize_text
+from .utils import normalize_text, redact_contacts
 
 logger = logging.getLogger("polovni_monitor.parser")
 
+# Honest, identifiable UA for the plain-HTTP backend.
 USER_AGENT = (
-    "Mozilla/5.0 (compatible; personal-car-monitor/0.1; low-frequency personal use)"
+    f"polovni-car-monitor/{__version__} "
+    "(+https://github.com/automa-flow/polovni-car-monitor; personal, low-frequency)"
 )
 
 # /auto-oglasi/{id}/...slug...
@@ -234,7 +238,9 @@ def parse_ad(html: str, url: str, ad_id: str) -> Ad:
         title = soup.title.get_text(strip=True)
     h1 = soup.find("h1")
     if h1 and h1.get_text(strip=True):
-        title = h1.get_text(strip=True)
+        # The h1 nests the year in a child span; join with a space so it
+        # reads "... Arval 2020. godište" rather than "...Arval2020. godište".
+        title = h1.get_text(" ", strip=True)
 
     # Location is read first — it relies on JSON-LD <script> tags that the
     # cleanup pass below removes.
@@ -244,7 +250,7 @@ def parse_ad(html: str, url: str, ad_id: str) -> Ad:
         tag.decompose()
     visible = soup.get_text(" ", strip=True)
 
-    description = _extract_description(soup, visible)
+    description = redact_contacts(_extract_description(soup, visible))
     norm_visible = normalize_text(visible)
 
     # Prefer the labeled spec block; fall back to whole-page regex.
@@ -256,7 +262,7 @@ def parse_ad(html: str, url: str, ad_id: str) -> Ad:
     return Ad(
         ad_id=ad_id,
         url=url,
-        title=title,
+        title=redact_contacts(title) if title else None,
         price=parse_price(visible),
         year=year if year is not None else parse_year(visible),
         mileage=mileage if mileage is not None else parse_mileage(visible),

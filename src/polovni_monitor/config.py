@@ -20,6 +20,13 @@ DB_PATH = DATA_DIR / "ads.db"
 DEFAULT_LOG_FILE = DATA_DIR / "logs" / "monitor.log"
 EXPORT_PATH = DATA_DIR / "export.csv"
 
+# Politeness floors. They are enforced in code (not just defaults) so that no
+# .env value can turn the monitor into a high-frequency scraper.
+MIN_CHECK_INTERVAL_MIN = 15
+MIN_REQUEST_DELAY_SEC = 2.0
+MAX_FETCH_RETRIES = 3
+MIN_RECHECK_KNOWN_HOURS = 24  # when enabled; 0 disables re-checks
+
 
 @dataclass
 class Config:
@@ -89,6 +96,12 @@ def _get_float(name: str, default: float) -> float:
         return default
 
 
+def _get_recheck_hours(name: str, default: int) -> int:
+    """Price re-check interval: 0 (or negative) disables, otherwise floored."""
+    hours = _get_int(name, default)
+    return 0 if hours <= 0 else max(MIN_RECHECK_KNOWN_HOURS, hours)
+
+
 def _get_log_level(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
@@ -114,31 +127,37 @@ def load_config() -> Config:
     return Config(
         tg_bot_token=os.getenv("TG_BOT_TOKEN", "").strip(),
         tg_chat_id=os.getenv("TG_CHAT_ID", "").strip(),
-        check_interval_min=_get_int("CHECK_INTERVAL_MIN", 45),
+        check_interval_min=max(
+            MIN_CHECK_INTERVAL_MIN, _get_int("CHECK_INTERVAL_MIN", 45)
+        ),
         price_to_eur=_get_int("PRICE_TO_EUR", 14000),
         seed_on_first_run=_get_bool("SEED_ON_FIRST_RUN", True),
         min_score_to_notify=_get_int("MIN_SCORE_TO_NOTIFY", 3),
         request_timeout_sec=_get_int("REQUEST_TIMEOUT_SEC", 25),
-        request_delay_sec=_get_float("REQUEST_DELAY_SEC", 2.0),
+        request_delay_sec=max(
+            MIN_REQUEST_DELAY_SEC, _get_float("REQUEST_DELAY_SEC", 2.0)
+        ),
         dry_run=_get_bool("DRY_RUN", False),
         db_path=DB_PATH,
         fetch_backend=os.getenv("FETCH_BACKEND", "playwright").strip().lower(),
         playwright_headless=_get_bool("PLAYWRIGHT_HEADLESS", True),
         playwright_channel=os.getenv("PLAYWRIGHT_CHANNEL", "").strip(),
         page_wait_ms=_get_int("PAGE_WAIT_MS", 4000),
-        fetch_retries=max(1, _get_int("FETCH_RETRIES", 2)),
+        fetch_retries=min(MAX_FETCH_RETRIES, max(1, _get_int("FETCH_RETRIES", 2))),
         use_llm=_get_bool("USE_LLM", True),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip(),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip(),
-        night_interval_min=_get_int("NIGHT_INTERVAL_MIN", 180),
+        night_interval_min=max(
+            MIN_CHECK_INTERVAL_MIN, _get_int("NIGHT_INTERVAL_MIN", 180)
+        ),
         night_start_hour=_get_int("NIGHT_START_HOUR", 0),
         night_end_hour=_get_int("NIGHT_END_HOUR", 7),
         deal_min_score=_get_int("DEAL_MIN_SCORE", 3),
         deal_price_eur=_get_int("DEAL_PRICE_EUR", 12500),
         deal_mileage_km=_get_int("DEAL_MILEAGE_KM", 130000),
         deal_year_from=_get_int("DEAL_YEAR_FROM", 2020),
-        recheck_known_hours=_get_int("RECHECK_KNOWN_HOURS", 24),
+        recheck_known_hours=_get_recheck_hours("RECHECK_KNOWN_HOURS", 24),
         price_drop_min_pct=_get_float("PRICE_DROP_MIN_PCT", 5.0),
         price_drop_min_eur=_get_int("PRICE_DROP_MIN_EUR", 300),
         heartbeat_hour=_get_int("HEARTBEAT_HOUR", 9),

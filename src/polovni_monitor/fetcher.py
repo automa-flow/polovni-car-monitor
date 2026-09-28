@@ -2,13 +2,15 @@
 
 Two interchangeable backends behind a tiny common interface:
 
-* ``requests`` — fast, but blocked by Cloudflare on PolovniAutomobili.
-* ``playwright`` — a real headless Chromium that renders JS and clears the
-  standard Cloudflare "Just a moment" challenge, exactly like opening the page
-  yourself. This is the default so the bot actually works.
+* ``requests`` — plain HTTP with an identifiable User-Agent. The site's
+  Cloudflare protection usually refuses it.
+* ``playwright`` — drives an ordinary Chromium/Chrome/Edge that renders the
+  page's JavaScript, like opening it yourself. This is the default.
 
-We do NOT solve captchas or bypass protections; we just render the page in a
-real browser at a low frequency.
+The browser is launched as-is: no stealth patches, no spoofed User-Agent, no
+hidden automation flags, no captcha solving. If the site's protection does not
+let a page through, the page is skipped and logged — the tool does not try to
+get around it.
 """
 from __future__ import annotations
 
@@ -32,11 +34,6 @@ class Fetcher(Protocol):
         """Release any underlying resources (HTTP session / browser)."""
         ...
 
-BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
-
 # Phrases that appear in the <title> of a Cloudflare interstitial (any language
 # the site serves). Used to tell "still being verified" from "real page".
 _CHALLENGE_TITLE_MARKERS = (
@@ -50,7 +47,7 @@ _CHALLENGE_TITLE_MARKERS = (
 
 
 class FetchError(RuntimeError):
-    """A page could not be fetched cleanly (e.g. Cloudflare never cleared)."""
+    """A page could not be fetched cleanly (e.g. the site's check never passed)."""
 
 
 class RequestsFetcher:
@@ -73,7 +70,7 @@ class RequestsFetcher:
 
 
 class PlaywrightFetcher:
-    """Headless-Chromium fetcher that renders JS and clears Cloudflare JS checks."""
+    """Real-browser fetcher that renders the page's JavaScript."""
 
     def __init__(self, cfg: Config) -> None:
         try:
@@ -91,9 +88,9 @@ class PlaywrightFetcher:
         self._retries = max(1, cfg.fetch_retries)
         self._pw = sync_playwright().start()
 
-        # Persistent profile: the cf_clearance cookie and cache survive between
-        # pages and between runs, so most requests skip the Cloudflare challenge
-        # entirely — exactly like a normal browser that keeps its cookies.
+        # Persistent profile: cookies and cache survive between pages and runs,
+        # like a normal browser that keeps its session. This also means fewer
+        # requests overall.
         profile_dir = cfg.db_path.parent / ".pw-profile"
         profile_dir.mkdir(parents=True, exist_ok=True)
         self._profile_dir = str(profile_dir)
@@ -107,11 +104,8 @@ class PlaywrightFetcher:
                 self._profile_dir,
                 headless=self._cfg.playwright_headless,
                 channel=channel,
-                user_agent=BROWSER_UA,
                 locale="sr-RS",
                 viewport={"width": 1366, "height": 900},
-                # Hide the headless "navigator.webdriver" automation flag.
-                args=["--disable-blink-features=AutomationControlled"],
             )
         except Exception as exc:
             if channel:
@@ -142,9 +136,9 @@ class PlaywrightFetcher:
 
                 self._await_clearance(page)
                 if self._on_challenge(page):
-                    last_err = FetchError("Cloudflare challenge not cleared")
+                    last_err = FetchError("site verification page did not go away")
                     logger.warning(
-                        "Cloudflare challenge still up (attempt %d/%d) for %s",
+                        "Verification page still shown (attempt %d/%d) for %s",
                         attempt, self._retries, url,
                     )
                     continue
@@ -165,11 +159,10 @@ class PlaywrightFetcher:
         )
 
     def _await_clearance(self, page) -> None:
-        """Poll until the Cloudflare interstitial is gone (or we run out of time).
+        """Wait until the Cloudflare interstitial is gone (or we run out of time).
 
-        The JS challenge needs several seconds to resolve; a fixed wait is too
-        short for some pages. We watch the document <title>, which is the most
-        reliable signal — the interstitial title differs from any real page.
+        The interstitial is left to do its own thing; we only watch the document
+        <title>, which differs from any real page, to know when to read it.
         """
         deadline = time.monotonic() + (self._timeout_ms / 1000)
         while time.monotonic() < deadline:
