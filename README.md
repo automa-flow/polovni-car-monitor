@@ -34,6 +34,7 @@ belt) search. See [Adapting it to other cars](#adapting-it-to-other-cars).
 - [Settings](#settings-env)
 - [Appraisal: keywords, deal score, LLM](#appraisal-keywords-deal-score-llm)
 - [Price drops, heartbeat, export](#price-drops-heartbeat-export)
+- [Design decisions](#design-decisions)
 - [Development](#development)
 - [Project layout](#project-layout)
 - [Legal & responsible use](#legal--responsible-use)
@@ -276,6 +277,62 @@ listing text goes to the API provider with phone numbers and e-mails masked.
 
 Notifications use Telegram HTML formatting with an inline **Open listing**
 button.
+
+## Design decisions
+
+**Parse anchors that don't change.** The site is a Next.js app with
+styled-components. Its class names are hashes like `kIbXrB` that change on
+every deploy, so the parser never depends on them. It anchors on things that
+stay put: the labelled spec rows (`Godište:`, `Kilometraža:`), the `Opis`
+heading and the JSON-LD block. Whole-page regex is only a fallback, because
+the same page shows teasers for other cars. A naive "first year on the page"
+regex picks up *their* year and mileage. The synthetic test fixture includes
+exactly such a decoy, so the tests catch that regression.
+
+**Graceful degradation without the LLM.** Appraisal has three layers, from
+cheapest to most expensive:
+
+1. **Keyword score.** Always runs, costs nothing, and is passed to the LLM as
+   a hint.
+2. **Deal score.** Always runs and uses only objective fields: price, mileage,
+   year, origin.
+3. **LLM appraisal.** When it is available, it alone decides the 🔥 flag.
+
+With no API key, the first two layers decide the flag. When a key is set but
+the API call fails (outage or exhausted quota), the listing is not silently
+lost or sent without analysis:
+
+- if a heuristic already marks it as interesting, it is sent with "AI
+  analysis: not available";
+- otherwise it is **not recorded** and is retried on the next pass, once the
+  LLM is back.
+
+`analyze_listing()` never raises: every API or parse error becomes an
+"unavailable" verdict. Explore searches have no model-specific heuristics, so
+there a failed appraisal just sends the listing without one.
+
+**Limits live in code, not in defaults.** A public tool should not be one
+`.env` edit away from becoming a high-frequency scraper. The site's Terms of
+Use also forbid creating unnecessary load. So the floors (15 min between
+passes, 2 s between page loads, 3 attempts per page, 24 h between price
+re-checks) are applied in `config.py` whatever the configuration says. They
+cost nothing in practice: new car listings appear at a pace of hours, not
+minutes. For the same reason:
+
+- a pass opens only *new* listings, so steady state is a few search pages
+  plus a handful of cards;
+- the first run only records what already exists;
+- a page stuck on a verification screen is skipped rather than worked around.
+
+**Personal data never leaves the parser unmasked.** Phone numbers and e-mails
+are masked in `parse_ad()`, before any sink: logs, the LLM provider, Telegram.
+The database keeps only a hash of the description, not the text. Tests use a
+hand-written page instead of a saved real one.
+
+**Testable without the network.** Fetching sits behind a small `Fetcher`
+protocol. `tests/test_scan.py` drives a full monitoring pass with an in-memory
+fake: seed, detect a new listing, send, then stay quiet. So the orchestration
+logic is covered without a browser, Telegram or an API key.
 
 ## Development
 
